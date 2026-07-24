@@ -43,5 +43,14 @@ meufinanceiro/
 
 ## Observações
 
-- Os dados ficam em memória (state do React) — ao dar refresh na página, os dados voltam para o exemplo inicial. Use a aba **Conexão Google Sheets** para importar/exportar seus dados via CSV, ou implemente persistência própria (ex.: um backend, ou `localStorage` — que funciona normalmente aqui fora do ambiente de artifacts do Claude).
+- Os dados ficam em memória (state do React) — ao dar refresh na página, os dados voltam ao estado em branco. Use a aba **Conexão Google Sheets** para importar/exportar/sincronizar seus dados, ou implemente persistência própria (ex.: `localStorage`, que funciona normalmente aqui fora do ambiente de artifacts do Claude, ou um backend).
 - Todo o código do dashboard está em `src/App.jsx`, um único arquivo — fica à vontade para dividir em componentes menores se o projeto crescer.
+
+## Login
+
+O app pede usuário e senha ao abrir. Credenciais padrão:
+- **Usuário:** `familia`
+- **Senha:** `meufinanceiro`
+
+**Troque isso antes de publicar!** Veja o comentário no topo de `src/App.jsx`, na constante `AUTH_CONFIG` — ele explica como gerar um novo hash e por que essa trava é apenas uma proteção básica do lado do cliente (não substitui autenticação de verdade num backend, nem a proteção por senha oferecida por provedores como a Vercel).
+

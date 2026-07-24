@@ -9,7 +9,8 @@ import {
   CreditCard, Car, PieChart as PieIcon, Calendar, Link2, Check,
   AlertCircle, ChevronDown, ChevronRight, Download, Upload, PiggyBank,
   ArrowUpRight, ArrowDownRight, BookOpen, CheckCircle2, Circle, Clock,
-  AlertTriangle, Eraser, Info, Repeat, ListOrdered, Infinity as InfinityIcon, Ban, Layers, Search, ClipboardPaste
+  AlertTriangle, Eraser, Info, Repeat, ListOrdered, Infinity as InfinityIcon, Ban, Layers, Search, ClipboardPaste,
+  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert
 } from "lucide-react";
 
 /* =========================================================================
@@ -39,11 +40,94 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const brl = (n) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n || 0);
 const brlCompact = (n) => new Intl.NumberFormat("pt-BR", { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(n || 0);
 
-const REFERENCE_YEAR = 2026;
+const REFERENCE_YEAR_DEFAULT = 2026;
 const TODAY = new Date();
 const SOON_WINDOW_DAYS = 5;
 
-const dueDateOf = (t) => new Date(REFERENCE_YEAR, t.month, t.dueDay || 10);
+/* =========================================================================
+   AUTENTICAÇÃO
+   -------------------------------------------------------------------------
+   Isso é uma trava de acesso simples do lado do cliente (sem backend).
+   Ela impede acesso casual, mas — como todo o código roda no navegador —
+   NÃO é uma barreira de segurança real contra um atacante determinado
+   (o hash abaixo pode ser lido e atacado offline, e o estado "autenticado"
+   pode ser forçado via DevTools). Para segurança de verdade, proteja o
+   domínio no provedor de hospedagem (ex.: Vercel Password Protection) ou
+   implemente autenticação em um backend próprio.
+
+   Para trocar o usuário/senha padrão, gere um novo hash rodando isto no
+   console do navegador (com a senha desejada) e cole o resultado abaixo:
+
+   crypto.subtle.digest("SHA-256", new TextEncoder().encode("usuario:senha"))
+     .then(b => console.log([...new Uint8Array(b)].map(x => x.toString(16).padStart(2,"0")).join("")))
+
+   Credenciais padrão: usuário "familia" · senha "meufinanceiro"
+   ========================================================================= */
+const AUTH_CONFIG = {
+  username: "familia",
+  hash: "a2c59262517a54d9428bd45ee36bd8a74ae6cabba2ac6a02edf2408dccd74f3e", // sha256("familia:meufinanceiro")
+  maxAttempts: 5,
+  lockoutSeconds: 30,
+};
+
+// SHA-256 puro em JS — usado como reserva caso window.crypto.subtle não esteja disponível
+// (alguns ambientes de sandbox restringem a Web Crypto API mesmo em contexto seguro).
+function sha256HexFallback(text) {
+  function rrot(n, x) { return (x >>> n) | (x << (32 - n)); }
+  const K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+  ];
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const bytes = new TextEncoder().encode(text);
+  const bitLen = bytes.length * 8;
+  const withOne = new Uint8Array(((bytes.length + 9 + 63) >> 6) << 6);
+  withOne.set(bytes);
+  withOne[bytes.length] = 0x80;
+  const dv = new DataView(withOne.buffer);
+  dv.setUint32(withOne.length - 4, bitLen >>> 0);
+  dv.setUint32(withOne.length - 8, Math.floor(bitLen / 4294967296));
+
+  for (let offset = 0; offset < withOne.length; offset += 64) {
+    const w = new Array(64);
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(offset + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rrot(7, w[i - 15]) ^ rrot(18, w[i - 15]) ^ (w[i - 15] >>> 3);
+      const s1 = rrot(17, w[i - 2]) ^ rrot(19, w[i - 2]) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rrot(6, e) ^ rrot(11, e) ^ rrot(25, e);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + K[i] + w[i]) | 0;
+      const S0 = rrot(2, a) ^ rrot(13, a) ^ rrot(22, a);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    H = [H[0]+a|0, H[1]+b|0, H[2]+c|0, H[3]+d|0, H[4]+e|0, H[5]+f|0, H[6]+g|0, H[7]+h|0];
+  }
+  return H.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+}
+
+async function sha256Hex(text) {
+  try {
+    if (window.crypto?.subtle) {
+      const buf = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+      return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+  } catch (_) { /* cai para a versão em JS puro abaixo */ }
+  return sha256HexFallback(text);
+}
+
+const dueDateOf = (t) => new Date(t.year || REFERENCE_YEAR_DEFAULT, t.month, t.dueDay || 10);
 
 // "paid" | "overdue" | "soon" | "pending"
 function paymentStatus(t) {
@@ -92,80 +176,31 @@ const seedCategories = () => ({
   ],
 });
 
-const seedCards = () => ([
-  { id: "nubank", name: "Nubank", limit: 6000, closingDay: 20, dueDay: 27, color: "#8A2BE2" },
-  { id: "itau", name: "Itaú", limit: 8500, closingDay: 5, dueDay: 12, color: "#EC7000" },
-]);
+const seedCards = () => ([]);
 
-const seedVehicles = () => ([
-  { id: "spurs_car", name: "Spurs Car", totalValue: 68000, totalInstallments: 48, installmentValue: 1495, paidInstallments: 19, startMonth: 0 },
-]);
-
-// Dia de vencimento padrão por subcategoria — usado para simular a base e como sugestão no formulário
-const DEFAULT_DUE_DAY = {
-  salario_principal: 5, salario_conjuge: 5, freelance: 10, rendimentos: 1,
-  aluguel: 5, condominio: 10, agua_luz: 15, internet: 10,
-  spurs_car: 10, combustivel: 5, manutencao: 15,
-  fatura_nubank: 27, fatura_itau: 12,
-  mercado: 5, restaurante: 5, plano_saude: 10, farmacia: 5,
-  streaming: 5, passeios: 5, escola: 10, diversos: 10,
-};
+const seedVehicles = () => ([]);
 
 function seedTransactions() {
-  const rows = [];
-  const push = (month, type, categoryId, subId, description, amount, extra = {}) => {
-    const dueDay = extra.dueDay || DEFAULT_DUE_DAY[subId] || 10;
-    // Meses passados: tudo já pago/recebido. Mês atual: mistura para demonstrar alertas. Meses futuros: ainda pendente.
-    let paid = month < CURRENT_MONTH_IDX;
-    if (month === CURRENT_MONTH_IDX) {
-      paid = extra.forcePending ? false : dueDay <= 18; // itens com vencimento já passado nesta simulação ficam pagos, os mais recentes ficam pendentes
-    }
-    rows.push({ id: uid(), month, type, categoryId, subId, description, amount, dueDay, paid, ...extra });
-  };
-
-  for (let m = 0; m < 12; m++) {
-    const wobble = (m % 4) * 35;
-    push(m, "income", "salario", "salario_principal", "Salário Principal", 8200 + wobble);
-    push(m, "income", "salario", "salario_conjuge", "Salário Cônjuge", 5400 + wobble * 0.6);
-    if (m % 3 === 0) push(m, "income", "extra", "freelance", "Projeto freelance", 900 + wobble, { notes: "Cliente: Estúdio Andrade — desenvolvimento de identidade visual." });
-    push(m, "income", "extra", "rendimentos", "Rendimentos poupança", 120 + m * 4);
-
-    push(m, "expense", "moradia", "aluguel", "Aluguel", 2600);
-    push(m, "expense", "moradia", "condominio", "Condomínio", 480);
-    push(m, "expense", "moradia", "agua_luz", "Água e Luz", 340 + wobble * 0.4);
-    push(m, "expense", "moradia", "internet", "Internet e TV", 189);
-
-    push(m, "expense", "veiculos", "spurs_car", "Parcela Spurs Car", 1495, {
-      vehicleId: "spurs_car", installmentNumber: 13 + m, installmentTotal: 48,
-      recurringGroupId: "seed-spurs-car", notes: "Financiamento CDC · Banco Santander · 48x fixas.",
-    });
-    push(m, "expense", "veiculos", "combustivel", "Combustível", 520 + wobble * 0.5);
-    if (m % 2 === 0) push(m, "expense", "veiculos", "manutencao", "Manutenção veículo", 210, m === CURRENT_MONTH_IDX ? { forcePending: true } : {});
-
-    push(m, "expense", "cartoes", "fatura_nubank", "Fatura Nubank", 1380 + wobble, { cardId: "nubank" });
-    push(m, "expense", "cartoes", "fatura_itau", "Fatura Itaú", 940 + wobble * 0.7, { cardId: "itau" });
-
-    push(m, "expense", "alimentacao", "mercado", "Mercado do mês", 1120 + wobble * 0.3);
-    push(m, "expense", "alimentacao", "restaurante", "Restaurantes / delivery", 380 + wobble * 0.2);
-
-    push(m, "expense", "saude", "plano_saude", "Plano de Saúde", 890, {
-      recurringGroupId: "seed-plano-saude", indefiniteRecurring: true,
-      notes: "Plano familiar Amil · 4 dependentes.",
-      ...(m === CURRENT_MONTH_IDX ? { forcePending: true } : {}),
-    });
-    if (m % 2 === 1) push(m, "expense", "saude", "farmacia", "Farmácia", 150);
-
-    push(m, "expense", "lazer", "streaming", "Assinaturas streaming", 89);
-    if (m % 3 === 2) push(m, "expense", "lazer", "passeios", "Passeio em família", 420);
-
-    if (m === 1 || m === 7) push(m, "expense", "educacao", "escola", "Material / curso", 650);
-  }
-  return rows;
+  return [];
 }
 
 /* =========================================================================
    SMALL UI PRIMITIVES
    ========================================================================= */
+/* =========================================================================
+   LOGOTIPO — monograma "M" em formato de gráfico ascendente sobre moeda,
+   nas cores do sistema (tinta + dourado)
+   ========================================================================= */
+function Logo({ size = 32 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="MeuFinanceiro">
+      <circle cx="20" cy="20" r="19" fill={GOLD} stroke="#8C6A1B" strokeWidth="1" />
+      <circle cx="20" cy="20" r="14.5" fill="none" stroke="#8C6A1B" strokeWidth="1" opacity="0.35" />
+      <path d="M10 26 L10 15 L15 22 L20 13 L25 22 L30 15 L30 26" stroke={INK} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
 function LedgerTab({ icon: Icon, label, active, onClick, badge }) {
   return (
     <button
@@ -251,29 +286,38 @@ function EmptyState({ icon: Icon, title, desc }) {
 /* =========================================================================
    MAIN APP
    ========================================================================= */
-export default function FinancialDashboard() {
+function Dashboard({ onLogout }) {
   const [tab, setTab] = useState("dashboard");
   const [categories, setCategories] = useState(seedCategories);
   const [cards, setCards] = useState(seedCards);
   const [vehicles, setVehicles] = useState(seedVehicles);
   const [transactions, setTransactions] = useState(seedTransactions);
+  const [currentYear, setCurrentYear] = useState(REFERENCE_YEAR_DEFAULT);
+  const [archivedYears, setArchivedYears] = useState({}); // { [year]: transactions[] }
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH_IDX);
   const [dashboardScope, setDashboardScope] = useState("month"); // "month" | "year"
-  const [sheetConfig, setSheetConfig] = useState({ url: "", status: "idle", message: "" });
+  const [sheetConfig, setSheetConfig] = useState({ url: "", appsScriptUrl: "", status: "idle", message: "", lastSync: null });
 
   const allCategories = useMemo(() => [...categories.income, ...categories.expense], [categories]);
   const catById = useCallback((id) => allCategories.find((c) => c.id === id), [allCategories]);
   const subById = useCallback((catId, subId) => catById(catId)?.subs.find((s) => s.id === subId), [catById]);
 
   /* ---------- CRUD: transactions ---------- */
-  const addTransaction = (tx) => setTransactions((prev) => [...prev, { id: uid(), paid: false, dueDay: 10, ...tx }]);
-  const addTransactionSeries = (entries) => setTransactions((prev) => [...prev, ...entries.map((e) => ({ id: uid(), paid: false, dueDay: 10, ...e }))]);
+  const addTransaction = (tx) => setTransactions((prev) => [...prev, { id: uid(), paid: false, dueDay: 10, year: currentYear, ...tx }]);
+  const addTransactionSeries = (entries) => setTransactions((prev) => [...prev, ...entries.map((e) => ({ id: uid(), paid: false, dueDay: 10, year: currentYear, ...e }))]);
   const updateTransaction = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const deleteTransaction = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id));
   const togglePaid = (id) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, paid: !t.paid } : t)));
   const clearMonthTransactions = (month) => setTransactions((prev) => prev.filter((t) => t.month !== month));
   const endRecurrence = (groupId, fromMonth) => setTransactions((prev) => prev.filter((t) => !(t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid)));
   const changeRecurrenceAmount = (groupId, fromMonth, newAmount) => setTransactions((prev) => prev.map((t) => (t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid ? { ...t, amount: newAmount } : t)));
+  const resetAllTransactions = () => setTransactions([]);
+  const archiveCurrentYear = () => {
+    setArchivedYears((prev) => ({ ...prev, [currentYear]: transactions }));
+    setTransactions([]);
+    setCurrentYear((y) => y + 1);
+    setSelectedMonth(0);
+  };
 
   /* ---------- CRUD: categories ---------- */
   const addCategory = (type, name) => {
@@ -366,7 +410,14 @@ export default function FinancialDashboard() {
     return count;
   }, [transactions]);
 
-  /* ---------- Google Sheets import ---------- */
+  /* ---------- Google Sheets import/export ---------- */
+  const toSheetRow = (t) => ({
+    ID: t.id, Mes: MONTHS[t.month], Tipo: t.type === "income" ? "Receita" : "Despesa",
+    Categoria: catById(t.categoryId)?.name || t.categoryId, Subcategoria: subById(t.categoryId, t.subId)?.name || t.subId,
+    Descricao: t.description, Valor: t.amount, Cartao: t.cardId || "", Veiculo: t.vehicleId || "",
+    Pago: t.paid ? "Sim" : "Não", Vencimento: t.dueDay || "",
+  });
+
   const parseCsvIntoTransactions = (text) => {
     const trimmed = text.trim();
     if (!trimmed) throw new Error("O conteúdo está vazio.");
@@ -389,7 +440,8 @@ export default function FinancialDashboard() {
       return i >= 0 ? i : 0;
     };
     return rows.map((r) => ({
-      id: uid(),
+      id: r.ID || r.Id || r.id || uid(),
+      year: currentYear,
       month: monthIndex(r.Mes || r.Mês || r.month),
       type: (r.Tipo || r.type || "").toLowerCase().startsWith("rec") ? "income" : "expense",
       categoryId: (r.Categoria || r.category || "outros_desp").toLowerCase(),
@@ -412,7 +464,7 @@ export default function FinancialDashboard() {
       const text = await res.text();
       const imported = parseCsvIntoTransactions(text);
       setTransactions(imported);
-      setSheetConfig((s) => ({ ...s, status: "success", message: `${imported.length} lançamentos importados com sucesso.` }));
+      setSheetConfig((s) => ({ ...s, status: "success", message: `${imported.length} lançamentos importados com sucesso (substituindo os dados locais). Para manter os dois lados sincronizados dali em diante, use a sincronização bidirecional abaixo.` }));
     } catch (err) {
       const isNetworkError = err instanceof TypeError;
       const suffix = isNetworkError
@@ -433,13 +485,60 @@ export default function FinancialDashboard() {
     }
   };
 
+  /* ---------- Sincronização bidirecional via Apps Script Web App ---------- */
+  const syncWithSheet = async () => {
+    if (!sheetConfig.appsScriptUrl) { setSheetConfig((s) => ({ ...s, status: "error", message: "Informe a URL do Apps Script Web App antes de sincronizar." })); return; }
+    setSheetConfig((s) => ({ ...s, status: "loading", message: "Buscando o que está na planilha…" }));
+    try {
+      // 1) Busca tudo que já está na planilha
+      const res = await fetch(sheetConfig.appsScriptUrl);
+      if (!res.ok) throw new Error("O Apps Script respondeu com erro " + res.status + " — confirme se o Web App foi publicado com acesso 'Qualquer pessoa'.");
+      const remoteRows = await res.json();
+      if (!Array.isArray(remoteRows)) throw new Error("A resposta do Apps Script não veio no formato esperado (lista de linhas).");
+
+      const monthIndex = (label) => {
+        const i = MONTHS.findIndex((m) => m.toLowerCase() === String(label || "").trim().slice(0, 3).toLowerCase());
+        return i >= 0 ? i : 0;
+      };
+      const remoteTx = remoteRows.filter((r) => r.ID).map((r) => ({
+        id: r.ID, year: currentYear, month: monthIndex(r.Mes), type: String(r.Tipo || "").toLowerCase().startsWith("rec") ? "income" : "expense",
+        categoryId: String(r.Categoria || "outros_desp").toLowerCase(), subId: String(r.Subcategoria || "diversos").toLowerCase(),
+        description: r.Descricao || "Importado da planilha", amount: parseFloat(String(r.Valor || "0").replace(",", ".")) || 0,
+        cardId: r.Cartao || undefined, vehicleId: r.Veiculo || undefined,
+        paid: String(r.Pago || "").toLowerCase().startsWith("s"), dueDay: Number(r.Vencimento) || 10,
+      }));
+
+      // 2) Mescla: o que só existe aqui vai pra lá; o que só existe lá vem pra cá; o que existe nos dois mantém os dados extras daqui (parcelas, recorrência, observações) e os valores atualizados de lá.
+      setTransactions((prevLocal) => {
+        const localById = new Map(prevLocal.map((t) => [t.id, t]));
+        const remoteById = new Map(remoteTx.map((t) => [t.id, t]));
+        const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
+        const merged = [];
+        allIds.forEach((id) => {
+          const loc = localById.get(id);
+          const rem = remoteById.get(id);
+          if (loc && rem) merged.push({ ...loc, ...rem, notes: loc.notes, installmentNumber: loc.installmentNumber, installmentTotal: loc.installmentTotal, recurringGroupId: loc.recurringGroupId, indefiniteRecurring: loc.indefiniteRecurring });
+          else merged.push(loc || rem);
+        });
+
+        // 3) Envia pra planilha o que só existia aqui (upsert em lote)
+        const toPush = prevLocal.filter((t) => !remoteById.has(t.id)).map(toSheetRow);
+        if (toPush.length) {
+          fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(toPush) }).catch(() => {});
+        }
+
+        return merged;
+      });
+
+      setSheetConfig((s) => ({ ...s, status: "success", message: `Sincronização concluída — ${remoteTx.length} lançamentos vieram da planilha e os que só existiam aqui foram enviados para lá.`, lastSync: new Date().toISOString() }));
+    } catch (err) {
+      const isNetworkError = err instanceof TypeError;
+      setSheetConfig((s) => ({ ...s, status: "error", message: (isNetworkError ? "Não foi possível conectar ao Apps Script — verifique a URL e se o deploy está com acesso 'Qualquer pessoa'." : "Falha ao sincronizar: " + err.message) }));
+    }
+  };
+
   const exportCsv = () => {
-    const csv = Papa.unparse(transactions.map((t) => ({
-      Mes: MONTHS[t.month], Tipo: t.type === "income" ? "Receita" : "Despesa",
-      Categoria: catById(t.categoryId)?.name || t.categoryId, Subcategoria: subById(t.categoryId, t.subId)?.name || t.subId,
-      Descricao: t.description, Valor: t.amount, Cartao: t.cardId || "", Veiculo: t.vehicleId || "",
-      Pago: t.paid ? "Sim" : "Não", Vencimento: t.dueDay || "",
-    })));
+    const csv = Papa.unparse(transactions.map(toSheetRow));
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -474,12 +573,12 @@ export default function FinancialDashboard() {
 
       <div className="flex">
         {/* ============ SIDEBAR — ledger index tabs ============ */}
-        <aside style={{ width: 236, background: INK, minHeight: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", paddingTop: 22 }}>
+        <aside style={{ width: 236, background: INK, height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", paddingTop: 22, display: "flex", flexDirection: "column" }}>
           <div className="px-5 pb-6 flex items-center gap-2.5">
-            <div style={{ background: GOLD, borderRadius: 8, padding: 7 }}><BookOpen size={16} color={INK} strokeWidth={2.3} /></div>
+            <Logo size={34} />
             <div>
               <div style={{ fontFamily: "'Fraunces', serif", fontSize: 15, fontWeight: 600, color: "#fff" }}>MeuFinanceiro</div>
-              <div style={{ fontSize: 10.5, color: "#8B95A8", letterSpacing: "0.06em" }}>CONTROLE FAMILIAR · 2026</div>
+              <div style={{ fontSize: 10.5, color: "#8B95A8", letterSpacing: "0.06em" }}>CONTROLE FAMILIAR · {currentYear}</div>
             </div>
           </div>
           <nav className="pl-2">
@@ -490,6 +589,12 @@ export default function FinancialDashboard() {
             <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => setTab("conexao")} />
             <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => setTab("relatorio")} />
           </nav>
+          <div className="px-4 mt-auto pt-8">
+            <button onClick={onLogout} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <LogOut size={15} /> Sair
+            </button>
+          </div>
         </aside>
 
         {/* ============ MAIN ============ */}
@@ -499,7 +604,7 @@ export default function FinancialDashboard() {
               dashboardScope={dashboardScope} setDashboardScope={setDashboardScope}
               selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}
               scopeKpis={scopeKpis} expenseByCategory={expenseByCategory} yearSeries={yearSeries}
-              cards={cards} vehicles={vehicles} cardInvoice={cardInvoice}
+              cards={cards} vehicles={vehicles} cardInvoice={cardInvoice} currentYear={currentYear}
             />
           )}
           {tab === "lancamentos" && (
@@ -509,14 +614,14 @@ export default function FinancialDashboard() {
               catById={catById} subById={subById}
               addTransaction={addTransaction} updateTransaction={updateTransaction} deleteTransaction={deleteTransaction}
               addTransactionSeries={addTransactionSeries}
-              togglePaid={togglePaid} clearMonthTransactions={clearMonthTransactions}
+              togglePaid={togglePaid} clearMonthTransactions={clearMonthTransactions} currentYear={currentYear}
             />
           )}
           {tab === "recorrencias" && (
             <RecorrenciasTab
               transactions={transactions} catById={catById} subById={subById} cards={cards} vehicles={vehicles}
               togglePaid={togglePaid} endRecurrence={endRecurrence} changeRecurrenceAmount={changeRecurrenceAmount}
-              setTab={setTab} setSelectedMonth={setSelectedMonth}
+              setTab={setTab} setSelectedMonth={setSelectedMonth} currentYear={currentYear}
             />
           )}
           {tab === "categorias" && (
@@ -529,10 +634,11 @@ export default function FinancialDashboard() {
             />
           )}
           {tab === "conexao" && (
-            <ConexaoTab sheetConfig={sheetConfig} setSheetConfig={setSheetConfig} importFromSheet={importFromSheet} importFromPastedCsv={importFromPastedCsv} exportCsv={exportCsv} />
+            <ConexaoTab sheetConfig={sheetConfig} setSheetConfig={setSheetConfig} importFromSheet={importFromSheet} importFromPastedCsv={importFromPastedCsv} exportCsv={exportCsv} syncWithSheet={syncWithSheet} resetAllTransactions={resetAllTransactions} transactionCount={transactions.length} />
           )}
           {tab === "relatorio" && (
-            <RelatorioTab categories={categories} transactions={transactions} yearTotals={yearTotals} catById={catById} />
+            <RelatorioTab categories={categories} transactions={transactions} yearTotals={yearTotals} catById={catById}
+              currentYear={currentYear} archivedYears={archivedYears} archiveCurrentYear={archiveCurrentYear} />
           )}
         </main>
       </div>
@@ -541,9 +647,149 @@ export default function FinancialDashboard() {
 }
 
 /* =========================================================================
+   AUTENTICAÇÃO — tela de login (proteção do lado do cliente)
+   ========================================================================= */
+function LoginScreen({ onSuccess }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [attempts, setAttempts] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const [checking, setChecking] = useState(false);
+  const [btnHover, setBtnHover] = useState(false);
+  const usernameRef = React.useRef(null);
+  const passwordRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!lockedUntil) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  const secondsLeft = lockedUntil ? Math.max(0, Math.ceil((lockedUntil - now) / 1000)) : 0;
+  const isLocked = secondsLeft > 0;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (isLocked || checking) return;
+    // Lê o valor direto do campo (não só do state) para não falhar quando o
+    // autofill/gerenciador de senhas preenche o campo sem disparar onChange.
+    const liveUsername = (usernameRef.current?.value ?? username).trim();
+    const livePassword = passwordRef.current?.value ?? password;
+
+    if (!liveUsername || !livePassword) {
+      setError("Preencha usuário e senha antes de entrar.");
+      return;
+    }
+
+    setChecking(true);
+    setError("");
+    try {
+      const hash = await sha256Hex(`${liveUsername}:${livePassword}`);
+      if (hash === AUTH_CONFIG.hash) {
+        onSuccess();
+        return;
+      }
+      const nextAttempts = attempts + 1;
+      setAttempts(nextAttempts);
+      setPassword("");
+      if (passwordRef.current) passwordRef.current.value = "";
+      if (nextAttempts >= AUTH_CONFIG.maxAttempts) {
+        setLockedUntil(Date.now() + AUTH_CONFIG.lockoutSeconds * 1000);
+        setAttempts(0);
+        setError(`Muitas tentativas incorretas. Aguarde ${AUTH_CONFIG.lockoutSeconds}s para tentar de novo.`);
+      } else {
+        setError(`Usuário ou senha incorretos (tentativa ${nextAttempts} de ${AUTH_CONFIG.maxAttempts}).`);
+      }
+    } catch (err) {
+      setError("Não foi possível verificar suas credenciais neste navegador (" + err.message + "). Tente atualizar a página ou usar outro navegador.");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div style={{ fontFamily: "Inter, sans-serif", background: INK, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+        input:focus { border-color: ${SAGE} !important; box-shadow: 0 0 0 3px rgba(61,107,92,0.18); }
+      `}</style>
+      <div className="w-full" style={{ maxWidth: 380 }}>
+        <div className="flex flex-col items-center mb-6">
+          <Logo size={48} />
+          <div className="mt-3 text-[19px] font-semibold" style={{ fontFamily: "'Fraunces', serif", color: "#fff" }}>MeuFinanceiro</div>
+          <div className="text-[12px] mt-1" style={{ color: "#8B95A8" }}>Controle financeiro familiar</div>
+        </div>
+
+        <form onSubmit={submit} className="rounded-xl p-6" style={{ background: PARCHMENT, border: `1px solid ${LINE}` }}>
+          <div className="flex items-center gap-2 mb-4">
+            <Lock size={15} color={SLATE} />
+            <span className="text-[13px] font-medium" style={{ color: INK }}>Acesso restrito</span>
+          </div>
+
+          <div className="space-y-3">
+            <Field label="Usuário">
+              <input ref={usernameRef} value={username} onChange={(e) => setUsername(e.target.value)} disabled={isLocked} autoFocus
+                autoCapitalize="off" autoCorrect="off" spellCheck="false" autoComplete="username"
+                className={inputCls} style={inputStyle} placeholder="Digite seu usuário" />
+            </Field>
+            <Field label="Senha">
+              <div className="relative">
+                <input ref={passwordRef} type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} disabled={isLocked}
+                  autoCapitalize="off" autoCorrect="off" spellCheck="false" autoComplete="current-password"
+                  className={inputCls} style={{ ...inputStyle, paddingRight: 36 }} placeholder="Digite sua senha" />
+                <button type="button" onClick={() => setShowPassword((s) => !s)} className="absolute right-2.5 top-1/2 -translate-y-1/2" tabIndex={-1}>
+                  {showPassword ? <EyeOff size={15} color={SLATE} /> : <Eye size={15} color={SLATE} />}
+                </button>
+              </div>
+            </Field>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 mt-3 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: RUST_SOFT, color: RUST }}>
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> <span>{isLocked ? `Muitas tentativas incorretas. Aguarde ${secondsLeft}s.` : error}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={isLocked || checking}
+            onMouseEnter={() => setBtnHover(true)}
+            onMouseLeave={() => setBtnHover(false)}
+            className="w-full mt-4 py-3 rounded-lg text-[14px] font-semibold flex items-center justify-center gap-2"
+            style={{
+              background: isLocked || checking ? "#8A93A6" : btnHover ? GOLD : INK,
+              color: "#fff",
+              border: "none",
+              cursor: isLocked || checking ? "not-allowed" : "pointer",
+              boxShadow: isLocked || checking ? "none" : "0 4px 14px rgba(16,27,45,0.25)",
+              transition: "background 0.15s ease",
+            }}
+          >
+            <KeyRound size={16} /> {isLocked ? `Aguarde ${secondsLeft}s` : checking ? "Verificando…" : "Entrar"}
+          </button>
+        </form>
+
+        <p className="text-[11px] text-center mt-4" style={{ color: "#6E7893" }}>
+          Acesso protegido por senha local. Para segurança adicional, configure também a proteção por senha do seu provedor de hospedagem.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [authed, setAuthed] = useState(false);
+  if (!authed) return <LoginScreen onSuccess={() => setAuthed(true)} />;
+  return <Dashboard onLogout={() => setAuthed(false)} />;
+}
+
+/* =========================================================================
    TAB: DASHBOARD
    ========================================================================= */
-function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSelectedMonth, scopeKpis, expenseByCategory, yearSeries, cards, vehicles, cardInvoice }) {
+function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSelectedMonth, scopeKpis, expenseByCategory, yearSeries, cards, vehicles, cardInvoice, currentYear }) {
   return (
     <div className="fade-up">
       <header className="flex items-start justify-between mb-6 flex-wrap gap-4">
@@ -566,8 +812,8 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
         <KpiCard label="Saldo Atual" value={brl(scopeKpis.saldoAtual)} sub={dashboardScope === "month" ? "Acumulado até o mês" : "Fechamento do ano"} icon={Wallet} tone="ink" />
-        <KpiCard label="Receita Total" value={brl(scopeKpis.income)} sub={dashboardScope === "month" ? MONTHS_FULL[selectedMonth] : "Ano de 2026"} icon={ArrowUpRight} tone="sage" />
-        <KpiCard label="Despesa Total" value={brl(scopeKpis.expense)} sub={dashboardScope === "month" ? MONTHS_FULL[selectedMonth] : "Ano de 2026"} icon={ArrowDownRight} tone="rust" />
+        <KpiCard label="Receita Total" value={brl(scopeKpis.income)} sub={dashboardScope === "month" ? MONTHS_FULL[selectedMonth] : `Ano de ${currentYear}`} icon={ArrowUpRight} tone="sage" />
+        <KpiCard label="Despesa Total" value={brl(scopeKpis.expense)} sub={dashboardScope === "month" ? MONTHS_FULL[selectedMonth] : `Ano de ${currentYear}`} icon={ArrowDownRight} tone="rust" />
         <KpiCard label="Taxa de Poupança" value={`${scopeKpis.savings.toFixed(1)}%`} sub="da receita foi poupada" icon={PiggyBank} tone="gold" />
       </div>
 
@@ -631,6 +877,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
                 </div>
               );
             })}
+            {!cards.length && <EmptyState icon={CreditCard} title="Nenhum cartão cadastrado" desc="Adicione seus cartões na aba Categorias para acompanhar faturas aqui." />}
           </div>
         </div>
         <div className="ledger-card stitch-top" style={{ background: PAPER }}>
@@ -680,7 +927,7 @@ function StatusChip({ t, onClick }) {
   );
 }
 
-function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions }) {
+function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions, currentYear }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [filterType, setFilterType] = useState("all");
@@ -884,7 +1131,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
         <TransactionModal
           onClose={() => setModalOpen(false)}
           initial={editing}
-          categories={categories} cards={cards} vehicles={vehicles} selectedMonth={selectedMonth}
+          categories={categories} cards={cards} vehicles={vehicles} selectedMonth={selectedMonth} currentYear={currentYear}
           onSave={(data) => {
             if (Array.isArray(data)) { addTransactionSeries(data); }
             else if (editing) { updateTransaction(editing.id, data); }
@@ -912,7 +1159,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
   );
 }
 
-function TransactionModal({ onClose, onSave, initial, categories, cards, vehicles, selectedMonth }) {
+function TransactionModal({ onClose, onSave, initial, categories, cards, vehicles, selectedMonth, currentYear }) {
   const [type, setType] = useState(initial?.type || "expense");
   const [month, setMonth] = useState(initial?.month ?? selectedMonth);
   const [categoryId, setCategoryId] = useState(initial?.categoryId || categories[type][0]?.id || "");
@@ -1047,7 +1294,7 @@ function TransactionModal({ onClose, onSave, initial, categories, cards, vehicle
                     ) : (
                       <div className="flex items-start gap-2 text-[11.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
                         <InfinityIcon size={14} className="mt-0.5 flex-shrink-0" />
-                        <span>Repete todo mês <b>indefinidamente</b>, sem data para parar — serão criados lançamentos de {MONTHS_FULL[Number(month)]} até Dezembro/2026 e o lançamento fica marcado como recorrente contínuo para os próximos anos.</span>
+                        <span>Repete todo mês <b>indefinidamente</b>, sem data para parar — serão criados lançamentos de {MONTHS_FULL[Number(month)]} até Dezembro/{currentYear} e o lançamento fica marcado como recorrente contínuo para os próximos anos.</span>
                       </div>
                     )}
                   </div>
@@ -1233,7 +1480,7 @@ function IndefiniteGroupCard({ group, catById, subById, togglePaid, onEnd, onCha
   );
 }
 
-function RecorrenciasTab({ transactions, catById, subById, cards, vehicles, togglePaid, endRecurrence, changeRecurrenceAmount, setTab, setSelectedMonth }) {
+function RecorrenciasTab({ transactions, catById, subById, cards, vehicles, togglePaid, endRecurrence, changeRecurrenceAmount, setTab, setSelectedMonth, currentYear }) {
   const [section, setSection] = useState("parcelamentos");
   const [installmentFilter, setInstallmentFilter] = useState("active");
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -1243,14 +1490,14 @@ function RecorrenciasTab({ transactions, catById, subById, cards, vehicles, togg
   const [nameQuery, setNameQuery] = useState("");
   const [monthFilter, setMonthFilter] = useState("all");
   const [yearFilter, setYearFilter] = useState("all");
-  const availableYears = [REFERENCE_YEAR];
+  const availableYears = [currentYear];
   const hasActiveFilters = nameQuery.trim() || monthFilter !== "all" || yearFilter !== "all";
   const clearFilters = () => { setNameQuery(""); setMonthFilter("all"); setYearFilter("all"); };
 
   const matchesFilters = useCallback((g) => {
     if (nameQuery.trim() && !g.description.toLowerCase().includes(nameQuery.trim().toLowerCase())) return false;
     if (monthFilter !== "all" && !g.entries.some((e) => e.month === Number(monthFilter))) return false;
-    if (yearFilter !== "all" && Number(yearFilter) !== REFERENCE_YEAR) return false;
+    if (yearFilter !== "all" && Number(yearFilter) !== currentYear) return false;
     return true;
   }, [nameQuery, monthFilter, yearFilter]);
 
@@ -1543,8 +1790,12 @@ function VehicleModal({ initial, onClose, onSave }) {
 /* =========================================================================
    TAB: CONEXÃO GOOGLE SHEETS
    ========================================================================= */
-function ConexaoTab({ sheetConfig, setSheetConfig, importFromSheet, importFromPastedCsv, exportCsv }) {
+function ConexaoTab({ sheetConfig, setSheetConfig, importFromSheet, importFromPastedCsv, exportCsv, syncWithSheet, resetAllTransactions, transactionCount }) {
   const [pasteText, setPasteText] = useState("");
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [syncing, setSyncing] = useState(false);
+
   const appsScript = `function doGet(e) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Lancamentos");
   const rows = sheet.getDataRange().getValues();
@@ -1556,25 +1807,62 @@ function ConexaoTab({ sheetConfig, setSheetConfig, importFromSheet, importFromPa
 
 function doPost(e) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Lancamentos");
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idCol = headers.indexOf("ID");
   const body = JSON.parse(e.postData.contents);
-  sheet.appendRow([body.Mes, body.Tipo, body.Categoria, body.Subcategoria, body.Descricao, body.Valor, body.Cartao, body.Veiculo]);
-  return ContentService.createTextOutput(JSON.stringify({ ok: true }));
+  const items = Array.isArray(body) ? body : [body];
+  const data = sheet.getDataRange().getValues();
+
+  items.forEach(item => {
+    const rowValues = headers.map(h => item[h] ?? "");
+    let rowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][idCol] === item.ID) { rowIndex = i; break; }
+    }
+    if (rowIndex >= 0) sheet.getRange(rowIndex + 1, 1, 1, headers.length).setValues([rowValues]);
+    else sheet.appendRow(rowValues);
+  });
+
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, count: items.length }))
+    .setMimeType(ContentService.MimeType.JSON);
 }`;
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try { await syncWithSheet(); } finally { setSyncing(false); }
+  };
 
   return (
     <div className="fade-up max-w-3xl">
       <header className="mb-6">
         <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Conexão com Google Sheets</h1>
-        <p className="text-[13px] mt-1" style={{ color: SLATE }}>Use sua planilha legada como base de dados — importe lançamentos e mantenha os dois sincronizados.</p>
+        <p className="text-[13px] mt-1" style={{ color: SLATE }}>Use sua planilha como base de dados — importe, exporte ou mantenha os dois lados sincronizados.</p>
       </header>
 
+      <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid #C7DBD0` }}>
+        <div className="flex items-center gap-2 mb-2"><RefreshCw size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold" style={{ color: SAGE }}>Sincronização bidirecional (recomendado)</h3></div>
+        <p className="text-[12.5px] mb-3" style={{ color: INK }}>
+          Busca o que já está preenchido na planilha e traz para cá, <b>e</b> envia para a planilha os lançamentos que já existem aqui e ainda não estão lá — os dois lados ficam com o mesmo conteúdo. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez.
+        </p>
+        <Field label="URL do Apps Script Web App">
+          <input value={sheetConfig.appsScriptUrl} onChange={(e) => setSheetConfig((s) => ({ ...s, appsScriptUrl: e.target.value }))} placeholder="https://script.google.com/macros/s/SEU_DEPLOY_ID/exec" className={inputCls} style={inputStyle} />
+        </Field>
+        <div className="flex items-center gap-2 mt-3">
+          <button onClick={handleSync} disabled={syncing} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50">
+            <RefreshCw size={14} className={syncing ? "animate-spin" : ""} /> {syncing ? "Sincronizando…" : "Sincronizar agora"}
+          </button>
+          {sheetConfig.lastSync && <span className="text-[11.5px]" style={{ color: SLATE }}>Última sincronização: {new Date(sheetConfig.lastSync).toLocaleString("pt-BR")}</span>}
+        </div>
+      </div>
+
       <div className="ledger-card mb-4" style={{ background: PAPER }}>
-        <div className="flex items-center gap-2 mb-3"><Link2 size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">1. Importar dados via CSV publicado</h3></div>
+        <div className="flex items-center gap-2 mb-3"><Link2 size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">1. Importação simples via CSV publicado (só leitura)</h3></div>
         <Field label="URL de publicação CSV (Arquivo → Compartilhar → Publicar na Web → formato CSV)">
           <input value={sheetConfig.url} onChange={(e) => setSheetConfig((s) => ({ ...s, url: e.target.value }))} placeholder="https://docs.google.com/spreadsheets/d/SEU_ID/pub?gid=0&single=true&output=csv" className={inputCls} style={inputStyle} />
         </Field>
+        <p className="text-[11.5px] mt-1.5" style={{ color: SLATE }}>Isso <b>substitui</b> os lançamentos daqui pelo conteúdo da planilha — bom para a primeira carga de dados. Não envia nada de volta (use a sincronização bidirecional acima para isso).</p>
         <div className="flex items-center gap-2 mt-3">
-          <button onClick={importFromSheet} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium"><Upload size={14} /> Importar dados</button>
+          <button onClick={importFromSheet} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}` }}><Upload size={14} /> Importar (substituir)</button>
           <button onClick={exportCsv} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}` }}><Download size={14} /> Exportar lançamentos (.csv)</button>
         </div>
         {sheetConfig.status !== "idle" && (
@@ -1589,12 +1877,12 @@ function doPost(e) {
       </div>
 
       <div className="ledger-card mb-4" style={{ background: PAPER }}>
-        <h3 className="text-[13.5px] font-semibold mb-3">Como publicar sua planilha (2 minutos)</h3>
+        <h3 className="text-[13.5px] font-semibold mb-3">2. Como publicar sua planilha (2 minutos)</h3>
         <ol className="space-y-2 text-[12.5px]" style={{ color: SLATE }}>
-          <li><b style={{ color: INK }}>1.</b> Na sua planilha, crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com colunas: Mes, Tipo, Categoria, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento.</li>
+          <li><b style={{ color: INK }}>1.</b> Na sua planilha, crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com colunas: ID, Mes, Tipo, Categoria, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento.</li>
           <li><b style={{ color: INK }}>2.</b> Vá em <b>Arquivo → Compartilhar → Publicar na Web</b> (não confunda com o botão "Compartilhar" comum — são telas diferentes).</li>
           <li><b style={{ color: INK }}>3.</b> No menu do meio, troque "Documento inteiro" pela aba <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> especificamente, e no menu da direita escolha o formato <b>CSV</b>, depois clique em Publicar.</li>
-          <li><b style={{ color: INK }}>4.</b> Copie o link gerado e cole no campo acima. Confira se o número depois de <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>gid=</code> no link corresponde à aba certa — se publicou pela aba errada, o gid pode ficar diferente do que você espera.</li>
+          <li><b style={{ color: INK }}>4.</b> Copie o link gerado e cole no campo do passo 1. Confira se o número depois de <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>gid=</code> corresponde à aba certa.</li>
         </ol>
       </div>
 
@@ -1603,21 +1891,49 @@ function doPost(e) {
         <p className="text-[12.5px] mb-3" style={{ color: SLATE }}>
           Se a importação automática acima falhar (é comum o navegador bloquear a busca direta a domínios do Google por CORS), abra o link publicado em outra aba, selecione tudo (<b>Ctrl/Cmd+A</b>), copie e cole o conteúdo aqui embaixo. Este caminho não depende de rede e sempre funciona.
         </p>
-        <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} placeholder="Mes,Tipo,Categoria,Subcategoria,Descricao,Valor,Cartao,Veiculo,Pago,Vencimento&#10;Jan,Despesa,moradia,aluguel,Aluguel,2600,,,Sim,5"
+        <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} placeholder="ID,Mes,Tipo,Categoria,Subcategoria,Descricao,Valor,Cartao,Veiculo,Pago,Vencimento&#10;abc123,Jan,Despesa,moradia,aluguel,Aluguel,2600,,,Sim,5"
           className={inputCls} style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, resize: "vertical" }} />
         <div className="flex items-center gap-2 mt-3">
           <button onClick={() => importFromPastedCsv(pasteText)} disabled={!pasteText.trim()} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40"><ClipboardPaste size={14} /> Importar do texto colado</button>
         </div>
       </div>
 
-      <div className="ledger-card" style={{ background: PAPER }}>
-        <div className="flex items-center gap-2 mb-2"><Settings2 size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">4. Sincronização bidirecional (opcional, via Apps Script)</h3></div>
+      <div className="ledger-card mb-4" style={{ background: PAPER }}>
+        <div className="flex items-center gap-2 mb-2"><Settings2 size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">4. Publicar o Apps Script Web App (necessário para a sincronização bidirecional)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: SLATE }}>
-          A leitura pública funciona só de um lado — para <b>gravar</b> novos lançamentos diretamente na planilha, publique um Apps Script Web App na própria planilha e aponte suas requisições para a URL gerada. Isso evita expor credenciais da API do Google no navegador.
+          A publicação em CSV só permite leitura — para <b>gravar</b> lançamentos na planilha, publique este script como Web App na própria planilha. A coluna <b>ID</b> é o que permite ao script atualizar a linha certa em vez de duplicar.
         </p>
         <pre className="text-[11.5px] p-3.5 rounded-lg overflow-x-auto" style={{ background: INK, color: "#D9E4F5", fontFamily: "'JetBrains Mono', monospace" }}>{appsScript}</pre>
-        <p className="text-[11.5px] mt-2" style={{ color: SLATE }}>Em <b>Extensões → Apps Script</b>, cole o código, publique como Web App ("Executar como: eu", "Quem pode acessar: qualquer pessoa") e use a URL gerada para leitura (GET) e gravação (POST).</p>
+        <p className="text-[11.5px] mt-2" style={{ color: SLATE }}>Em <b>Extensões → Apps Script</b>, cole o código, publique como Web App ("Executar como: eu", "Quem pode acessar: qualquer pessoa") e cole a URL gerada no campo de sincronização bidirecional no topo desta página.</p>
       </div>
+
+      <div className="ledger-card" style={{ background: RUST_SOFT, border: "1px solid #E3B6A6" }}>
+        <div className="flex items-center gap-2 mb-2"><ShieldAlert size={15} color={RUST} /><h3 className="text-[13.5px] font-semibold" style={{ color: RUST }}>Zona de risco</h3></div>
+        <p className="text-[12.5px] mb-3" style={{ color: INK }}>Apaga permanentemente <b>todos os {transactionCount} lançamentos</b> do ano atual (não afeta categorias, cartões, veículos nem anos já arquivados).</p>
+        <button onClick={() => { setResetModalOpen(true); setConfirmText(""); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium text-white" style={{ background: RUST }}>
+          <Eraser size={14} /> Resetar todos os lançamentos
+        </button>
+      </div>
+
+      {resetModalOpen && (
+        <Modal title="Resetar todos os lançamentos" onClose={() => setResetModalOpen(false)}>
+          <div className="flex items-start gap-3 mb-4">
+            <div style={{ background: RUST_SOFT, borderRadius: 999, padding: 10, flexShrink: 0 }}><ShieldAlert size={18} color={RUST} /></div>
+            <p className="text-[13px]" style={{ color: INK }}>
+              Isso vai excluir permanentemente <b>todos os {transactionCount} lançamentos</b> do ano atual, em todos os meses. Essa ação não pode ser desfeita.
+              Para confirmar, digite <b>RESETAR</b> no campo abaixo.
+            </p>
+          </div>
+          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="Digite RESETAR para confirmar" className={inputCls} style={inputStyle} />
+          <div className="flex justify-end gap-2 pt-4">
+            <button onClick={() => setResetModalOpen(false)} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+            <button onClick={() => { resetAllTransactions(); setResetModalOpen(false); }} disabled={confirmText.trim().toUpperCase() !== "RESETAR"}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium text-white disabled:opacity-40" style={{ background: RUST }}>
+              Resetar tudo
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1625,19 +1941,32 @@ function doPost(e) {
 /* =========================================================================
    TAB: RELATÓRIO ANUAL
    ========================================================================= */
-function RelatorioTab({ categories, transactions, yearTotals, catById }) {
+function RelatorioTab({ categories, transactions, yearTotals, catById, currentYear, archivedYears, archiveCurrentYear }) {
+  const archivedYearsList = Object.keys(archivedYears).map(Number).sort((a, b) => b - a);
+  const [selectedYear, setSelectedYear] = useState(currentYear);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  const isViewingCurrent = selectedYear === currentYear;
+  const dataset = isViewingCurrent ? transactions : (archivedYears[selectedYear] || []);
+
   const rows = useMemo(() => {
     const build = (list, type) => list.map((c) => {
-      const values = MONTHS.map((_, m) => transactions.filter((t) => t.month === m && t.categoryId === c.id && t.type === type).reduce((s, t) => s + Number(t.amount || 0), 0));
+      const values = MONTHS.map((_, m) => dataset.filter((t) => t.month === m && t.categoryId === c.id && t.type === type).reduce((s, t) => s + Number(t.amount || 0), 0));
       return { id: c.id, name: c.name, color: c.color, values, total: values.reduce((a, b) => a + b, 0) };
     });
     return { income: build(categories.income, "income"), expense: build(categories.expense, "expense") };
-  }, [categories, transactions]);
+  }, [categories, dataset]);
 
-  const monthlyIncome = MONTHS.map((_, m) => transactions.filter((t) => t.month === m && t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0));
-  const monthlyExpense = MONTHS.map((_, m) => transactions.filter((t) => t.month === m && t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0));
+  const monthlyIncome = MONTHS.map((_, m) => dataset.filter((t) => t.month === m && t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0));
+  const monthlyExpense = MONTHS.map((_, m) => dataset.filter((t) => t.month === m && t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0));
   const monthlyBalance = monthlyIncome.map((v, i) => v - monthlyExpense[i]);
-  const avgSavings = (yearTotals.balance / 12);
+  const totals = isViewingCurrent ? yearTotals : {
+    income: monthlyIncome.reduce((a, b) => a + b, 0),
+    expense: monthlyExpense.reduce((a, b) => a + b, 0),
+    balance: monthlyIncome.reduce((a, b) => a + b, 0) - monthlyExpense.reduce((a, b) => a + b, 0),
+  };
+  const avgSavings = (totals.balance / 12);
 
   const Row = ({ label, values, total, bold, color }) => (
     <tr style={{ borderBottom: `1px solid ${LINE}` }}>
@@ -1649,15 +1978,36 @@ function RelatorioTab({ categories, transactions, yearTotals, catById }) {
 
   return (
     <div className="fade-up">
-      <header className="mb-6">
-        <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Relatório Anual — 2026</h1>
-        <p className="text-[13px] mt-1" style={{ color: SLATE }}>Consolidação mês a mês de todas as categorias, de Janeiro a Dezembro.</p>
+      <header className="flex items-start justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Relatório Anual — {selectedYear}</h1>
+          <p className="text-[13px] mt-1" style={{ color: SLATE }}>Consolidação mês a mês de todas as categorias, de Janeiro a Dezembro.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {archivedYearsList.length > 0 && (
+            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={inputCls} style={{ ...inputStyle, width: 160 }}>
+              <option value={currentYear}>{currentYear} (ano atual)</option>
+              {archivedYearsList.map((y) => <option key={y} value={y}>{y} (arquivado)</option>)}
+            </select>
+          )}
+          {isViewingCurrent && (
+            <button onClick={() => { setArchiveModalOpen(true); setConfirmText(""); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}`, color: "#8C6A1B" }}>
+              <Archive size={14} /> Arquivar {currentYear} e iniciar {currentYear + 1}
+            </button>
+          )}
+        </div>
       </header>
 
+      {!isViewingCurrent && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-5 text-[12.5px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+          <Archive size={14} /> Você está vendo o histórico arquivado de {selectedYear} — somente leitura.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <KpiCard label="Receita Anual" value={brl(yearTotals.income)} icon={ArrowUpRight} tone="sage" />
-        <KpiCard label="Despesa Anual" value={brl(yearTotals.expense)} icon={ArrowDownRight} tone="rust" />
-        <KpiCard label="Saldo Anual" value={brl(yearTotals.balance)} icon={Wallet} tone="ink" />
+        <KpiCard label="Receita Anual" value={brl(totals.income)} icon={ArrowUpRight} tone="sage" />
+        <KpiCard label="Despesa Anual" value={brl(totals.expense)} icon={ArrowDownRight} tone="rust" />
+        <KpiCard label="Saldo Anual" value={brl(totals.balance)} icon={Wallet} tone="ink" />
         <KpiCard label="Economia Média Mensal" value={brl(avgSavings)} icon={PiggyBank} tone="gold" />
       </div>
 
@@ -1687,17 +2037,37 @@ function RelatorioTab({ categories, transactions, yearTotals, catById }) {
             <tbody>
               <tr><td colSpan={14} className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color: SAGE, background: SAGE_SOFT }}>Receitas</td></tr>
               {rows.income.map((r) => <Row key={r.id} label={r.name} values={r.values} total={r.total} color={SAGE} />)}
-              <Row label="Total de Entradas" values={monthlyIncome} total={yearTotals.income} bold color={SAGE} />
+              <Row label="Total de Entradas" values={monthlyIncome} total={totals.income} bold color={SAGE} />
 
               <tr><td colSpan={14} className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color: RUST, background: RUST_SOFT }}>Despesas</td></tr>
               {rows.expense.map((r) => <Row key={r.id} label={r.name} values={r.values} total={r.total} color={RUST} />)}
-              <Row label="Total de Saídas" values={monthlyExpense} total={yearTotals.expense} bold color={RUST} />
+              <Row label="Total de Saídas" values={monthlyExpense} total={totals.expense} bold color={RUST} />
 
-              <Row label="Saldo Final" values={monthlyBalance} total={yearTotals.balance} bold />
+              <Row label="Saldo Final" values={monthlyBalance} total={totals.balance} bold />
             </tbody>
           </table>
         </div>
       </div>
+
+      {archiveModalOpen && (
+        <Modal title={`Arquivar ${currentYear}`} onClose={() => setArchiveModalOpen(false)}>
+          <div className="flex items-start gap-3 mb-4">
+            <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 10, flexShrink: 0 }}><Archive size={18} color="#8C6A1B" /></div>
+            <p className="text-[13px]" style={{ color: INK }}>
+              Isso move todos os lançamentos de <b>{currentYear}</b> para o histórico (você poderá consultá-los depois, só leitura) e libera os 12 meses em branco para <b>{currentYear + 1}</b>. Categorias, cartões e veículos cadastrados continuam os mesmos.
+              Para confirmar, digite <b>ARQUIVAR</b> no campo abaixo.
+            </p>
+          </div>
+          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="Digite ARQUIVAR para confirmar" className={inputCls} style={inputStyle} />
+          <div className="flex justify-end gap-2 pt-4">
+            <button onClick={() => setArchiveModalOpen(false)} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+            <button onClick={() => { archiveCurrentYear(); setArchiveModalOpen(false); setSelectedYear(currentYear + 1); }} disabled={confirmText.trim().toUpperCase() !== "ARQUIVAR"}
+              className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">
+              Arquivar {currentYear}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
