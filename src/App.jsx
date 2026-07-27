@@ -286,8 +286,9 @@ function EmptyState({ icon: Icon, title, desc }) {
 /* =========================================================================
    MAIN APP
    ========================================================================= */
-function Dashboard({ onLogout }) {
+function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning }) {
   const [tab, setTab] = useState("dashboard");
+  const [credentialsModalOpen, setCredentialsModalOpen] = useState(false);
   const [categories, setCategories] = useState(seedCategories);
   const [cards, setCards] = useState(seedCards);
   const [vehicles, setVehicles] = useState(seedVehicles);
@@ -303,15 +304,86 @@ function Dashboard({ onLogout }) {
   const subById = useCallback((catId, subId) => catById(catId)?.subs.find((s) => s.id === subId), [catById]);
 
   /* ---------- CRUD: transactions ---------- */
-  const addTransaction = (tx) => setTransactions((prev) => [...prev, { id: uid(), paid: false, dueDay: 10, year: currentYear, ...tx }]);
-  const addTransactionSeries = (entries) => setTransactions((prev) => [...prev, ...entries.map((e) => ({ id: uid(), paid: false, dueDay: 10, year: currentYear, ...e }))]);
-  const updateTransaction = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  const deleteTransaction = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id));
-  const togglePaid = (id) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, paid: !t.paid } : t)));
-  const clearMonthTransactions = (month) => setTransactions((prev) => prev.filter((t) => t.month !== month));
-  const endRecurrence = (groupId, fromMonth) => setTransactions((prev) => prev.filter((t) => !(t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid)));
-  const changeRecurrenceAmount = (groupId, fromMonth, newAmount) => setTransactions((prev) => prev.map((t) => (t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid ? { ...t, amount: newAmount } : t)));
-  const resetAllTransactions = () => setTransactions([]);
+  /* ---------- Sincronização automática em segundo plano ---------- */
+  const pushRowsToSheet = async (rows) => {
+    if (!sheetConfig.appsScriptUrl || !rows.length) return;
+    try {
+      const res = await fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(rows) });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setSheetConfig((s) => ({ ...s, lastSync: new Date().toISOString() }));
+    } catch (err) {
+      setSheetConfig((s) => ({ ...s, status: "error", message: "Não foi possível salvar automaticamente na planilha (" + err.message + "). O lançamento continua salvo aqui — use 'Sincronizar agora' para tentar de novo." }));
+    }
+  };
+  const deleteRowsFromSheet = async (ids) => {
+    if (!sheetConfig.appsScriptUrl || !ids.length) return;
+    try {
+      const res = await fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(ids.map((id) => ({ ID: id, _delete: true }))) });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setSheetConfig((s) => ({ ...s, lastSync: new Date().toISOString() }));
+    } catch (err) {
+      setSheetConfig((s) => ({ ...s, status: "error", message: "Não foi possível remover automaticamente da planilha (" + err.message + "). Use 'Sincronizar agora' para tentar de novo." }));
+    }
+  };
+
+  const addTransaction = (tx) => {
+    const full = { id: uid(), paid: false, dueDay: 10, year: currentYear, ...tx };
+    setTransactions((prev) => [...prev, full]);
+    pushRowsToSheet([toSheetRow(full)]);
+  };
+  const addTransactionSeries = (entries) => {
+    const fulls = entries.map((e) => ({ id: uid(), paid: false, dueDay: 10, year: currentYear, ...e }));
+    setTransactions((prev) => [...prev, ...fulls]);
+    pushRowsToSheet(fulls.map(toSheetRow));
+  };
+  const updateTransaction = (id, patch) => {
+    setTransactions((prev) => {
+      const next = prev.map((t) => (t.id === id ? { ...t, ...patch } : t));
+      const updated = next.find((t) => t.id === id);
+      if (updated) pushRowsToSheet([toSheetRow(updated)]);
+      return next;
+    });
+  };
+  const deleteTransaction = (id) => {
+    setTransactions((prev) => prev.filter((t) => t.id !== id));
+    deleteRowsFromSheet([id]);
+  };
+  const togglePaid = (id) => {
+    setTransactions((prev) => {
+      const next = prev.map((t) => (t.id === id ? { ...t, paid: !t.paid } : t));
+      const updated = next.find((t) => t.id === id);
+      if (updated) pushRowsToSheet([toSheetRow(updated)]);
+      return next;
+    });
+  };
+  const clearMonthTransactions = (month) => {
+    setTransactions((prev) => {
+      const toRemove = prev.filter((t) => t.month === month);
+      if (toRemove.length) deleteRowsFromSheet(toRemove.map((t) => t.id));
+      return prev.filter((t) => t.month !== month);
+    });
+  };
+  const endRecurrence = (groupId, fromMonth) => {
+    setTransactions((prev) => {
+      const toRemove = prev.filter((t) => t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid);
+      if (toRemove.length) deleteRowsFromSheet(toRemove.map((t) => t.id));
+      return prev.filter((t) => !toRemove.includes(t));
+    });
+  };
+  const changeRecurrenceAmount = (groupId, fromMonth, newAmount) => {
+    setTransactions((prev) => {
+      const next = prev.map((t) => (t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid ? { ...t, amount: newAmount } : t));
+      const changed = next.filter((t) => t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid);
+      if (changed.length) pushRowsToSheet(changed.map(toSheetRow));
+      return next;
+    });
+  };
+  const resetAllTransactions = () => {
+    setTransactions((prev) => {
+      if (prev.length) deleteRowsFromSheet(prev.map((t) => t.id));
+      return [];
+    });
+  };
   const archiveCurrentYear = () => {
     setArchivedYears((prev) => ({ ...prev, [currentYear]: transactions }));
     setTransactions([]);
@@ -493,7 +565,16 @@ function Dashboard({ onLogout }) {
       // 1) Busca tudo que já está na planilha
       const res = await fetch(sheetConfig.appsScriptUrl);
       if (!res.ok) throw new Error("O Apps Script respondeu com erro " + res.status + " — confirme se o Web App foi publicado com acesso 'Qualquer pessoa'.");
-      const remoteRows = await res.json();
+      const rawText = await res.text();
+      let remoteRows;
+      try {
+        remoteRows = JSON.parse(rawText);
+      } catch {
+        if (rawText.trim().toLowerCase().startsWith("id,") || rawText.includes(",")) {
+          throw new Error("A URL informada parece ser o link de publicação em CSV (do passo 1), não a URL do Apps Script Web App (que termina em /exec, gerada no passo 4). Cole a URL certa no campo de sincronização.");
+        }
+        throw new Error("A resposta não veio em JSON válido — confirme se colou a URL do Apps Script Web App (termina em /exec) e se o deploy está ativo.");
+      }
       if (!Array.isArray(remoteRows)) throw new Error("A resposta do Apps Script não veio no formato esperado (lista de linhas).");
 
       const monthIndex = (label) => {
@@ -590,12 +671,23 @@ function Dashboard({ onLogout }) {
             <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => setTab("relatorio")} />
           </nav>
           <div className="px-4 mt-auto pt-8">
+            <button onClick={() => setCredentialsModalOpen(true)} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <KeyRound size={15} /> Alterar usuário e senha
+            </button>
             <button onClick={onLogout} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               <LogOut size={15} /> Sair
             </button>
           </div>
         </aside>
+
+        {credentialsModalOpen && (
+          <ChangeCredentialsModal
+            authConfig={authConfig} verifyCredentials={verifyCredentials} updateCredentials={updateCredentials}
+            persistWarning={persistWarning} onClose={() => setCredentialsModalOpen(false)}
+          />
+        )}
 
         {/* ============ MAIN ============ */}
         <main className="flex-1 min-w-0 px-8 py-8">
@@ -615,6 +707,7 @@ function Dashboard({ onLogout }) {
               addTransaction={addTransaction} updateTransaction={updateTransaction} deleteTransaction={deleteTransaction}
               addTransactionSeries={addTransactionSeries}
               togglePaid={togglePaid} clearMonthTransactions={clearMonthTransactions} currentYear={currentYear}
+              archivedYears={archivedYears}
             />
           )}
           {tab === "recorrencias" && (
@@ -649,7 +742,7 @@ function Dashboard({ onLogout }) {
 /* =========================================================================
    AUTENTICAÇÃO — tela de login (proteção do lado do cliente)
    ========================================================================= */
-function LoginScreen({ onSuccess }) {
+function LoginScreen({ onSuccess, authConfig }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -688,7 +781,7 @@ function LoginScreen({ onSuccess }) {
     setError("");
     try {
       const hash = await sha256Hex(`${liveUsername}:${livePassword}`);
-      if (hash === AUTH_CONFIG.hash) {
+      if (hash === authConfig.hash) {
         onSuccess();
         return;
       }
@@ -780,10 +873,135 @@ function LoginScreen({ onSuccess }) {
   );
 }
 
+/* =========================================================================
+   MODAL — Alterar usuário e senha
+   ========================================================================= */
+function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentials, persistWarning, onClose }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newUsername, setNewUsername] = useState(authConfig.username);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!currentPassword) { setError("Informe sua senha atual para confirmar a alteração."); return; }
+    if (!newUsername.trim() || !newPassword) { setError("Preencha o novo usuário e a nova senha."); return; }
+    if (newPassword.length < 6) { setError("A nova senha deve ter pelo menos 6 caracteres."); return; }
+    if (newPassword !== confirmPassword) { setError("A confirmação não é igual à nova senha."); return; }
+
+    setSaving(true);
+    try {
+      const ok = await verifyCredentials(authConfig.username, currentPassword);
+      if (!ok) { setError("Senha atual incorreta."); return; }
+      await updateCredentials(newUsername, newPassword);
+      setSuccess(true);
+      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+    } catch (err) {
+      setError("Não foi possível salvar as novas credenciais neste navegador (" + err.message + ").");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Alterar usuário e senha" onClose={onClose}>
+      {success ? (
+        <div>
+          <div className="flex items-start gap-3 mb-4 px-3.5 py-3 rounded-lg" style={{ background: SAGE_SOFT }}>
+            <CheckCircle2 size={18} color={SAGE} className="flex-shrink-0 mt-0.5" />
+            <p className="text-[13px]" style={{ color: INK }}>Credenciais atualizadas com sucesso. Use o novo usuário e senha no próximo login.</p>
+          </div>
+          {persistWarning && (
+            <div className="flex items-start gap-2 mb-4 px-3.5 py-3 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+              <span>Este navegador não permitiu salvar de forma permanente — a alteração vale só para esta aba/sessão. Ao recarregar a página, as credenciais anteriores voltam a valer.</span>
+            </div>
+          )}
+          <div className="flex justify-end"><button onClick={onClose} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium">Fechar</button></div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-3.5">
+          <Field label="Senha atual (para confirmar sua identidade)">
+            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className={inputCls} style={inputStyle} autoComplete="current-password" />
+          </Field>
+          <Field label="Novo usuário">
+            <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className={inputCls} style={inputStyle} autoComplete="username" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Nova senha"><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={inputCls} style={inputStyle} autoComplete="new-password" /></Field>
+            <Field label="Confirmar nova senha"><input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={inputCls} style={inputStyle} autoComplete="new-password" /></Field>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: RUST_SOFT, color: RUST }}>
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> <span>{error}</span>
+            </div>
+          )}
+
+          <p className="text-[11.5px]" style={{ color: SLATE }}>
+            Isso é salvo neste navegador (armazenamento local). Se você limpar os dados do navegador, usar uma aba anônima, ou acessar de outro dispositivo, as credenciais voltam a ser as definidas no código-fonte (constante <code className="px-1 rounded" style={{ background: "#EEE7D4" }}>AUTH_CONFIG</code>).
+          </p>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+            <button type="submit" disabled={saving} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50">{saving ? "Salvando…" : "Salvar novas credenciais"}</button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+const AUTH_STORAGE_KEY = "meufinanceiro_auth_v1";
+
+function loadStoredAuthConfig() {
+  try {
+    const raw = window.localStorage?.getItem(AUTH_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.username && parsed?.hash) return parsed;
+    }
+  } catch (_) { /* localStorage indisponível neste ambiente — usa o padrão do código */ }
+  return { username: AUTH_CONFIG.username, hash: AUTH_CONFIG.hash };
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(false);
-  if (!authed) return <LoginScreen onSuccess={() => setAuthed(true)} />;
-  return <Dashboard onLogout={() => setAuthed(false)} />;
+  const [authConfig, setAuthConfig] = useState(loadStoredAuthConfig);
+  const [persistWarning, setPersistWarning] = useState(false);
+
+  const updateCredentials = async (newUsername, newPassword) => {
+    const hash = await sha256Hex(`${newUsername.trim()}:${newPassword}`);
+    const next = { username: newUsername.trim(), hash };
+    setAuthConfig(next);
+    try {
+      window.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(next));
+      setPersistWarning(false);
+    } catch (_) {
+      setPersistWarning(true); // credenciais trocadas só para esta sessão/aba
+    }
+    return next;
+  };
+
+  const verifyCredentials = async (usernameInput, passwordInput) => {
+    const hash = await sha256Hex(`${usernameInput.trim()}:${passwordInput}`);
+    return hash === authConfig.hash;
+  };
+
+  if (!authed) return <LoginScreen authConfig={authConfig} onSuccess={() => setAuthed(true)} />;
+  return (
+    <Dashboard
+      onLogout={() => setAuthed(false)}
+      authConfig={authConfig}
+      updateCredentials={updateCredentials}
+      verifyCredentials={verifyCredentials}
+      persistWarning={persistWarning}
+    />
+  );
 }
 
 /* =========================================================================
@@ -919,15 +1137,18 @@ function StatusChip({ t, onClick }) {
   const status = paymentStatus(t);
   const meta = (t.type === "income" ? STATUS_META_INCOME : STATUS_META)[status];
   const Icon = meta.icon;
+  const interactive = !!onClick;
   return (
-    <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium whitespace-nowrap" style={{ background: meta.bg, color: meta.color }} title="Clique para alternar o status de pagamento">
+    <button onClick={onClick} disabled={!interactive} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium whitespace-nowrap"
+      style={{ background: meta.bg, color: meta.color, cursor: interactive ? "pointer" : "default" }}
+      title={interactive ? "Clique para alternar o status de pagamento" : undefined}>
       <Icon size={11.5} strokeWidth={2.4} />
       {meta.label}
     </button>
   );
 }
 
-function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions, currentYear }) {
+function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions, currentYear, archivedYears }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [filterType, setFilterType] = useState("all");
@@ -935,8 +1156,13 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
   const [descQuery, setDescQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "paid" | "unpaid"
+  const [selectedYear, setSelectedYear] = useState(currentYear);
 
-  const allMonthTx = transactions.filter((t) => t.month === selectedMonth);
+  const archivedYearsList = Object.keys(archivedYears || {}).map(Number).sort((a, b) => b - a);
+  const isViewingCurrent = selectedYear === currentYear;
+  const dataset = isViewingCurrent ? transactions : (archivedYears[selectedYear] || []);
+
+  const allMonthTx = dataset.filter((t) => t.month === selectedMonth);
   const monthTx = allMonthTx.filter((t) => filterType === "all" || t.type === filterType)
     .filter((t) => !descQuery.trim() || t.description.toLowerCase().includes(descQuery.trim().toLowerCase()))
     .filter((t) => categoryFilter === "all" || t.categoryId === categoryFilter)
@@ -959,8 +1185,8 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
   const income = allMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
   const expense = allMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
 
-  const overdueItems = allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "overdue").sort((a, b) => a.dueDay - b.dueDay);
-  const soonItems = allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "soon").sort((a, b) => a.dueDay - b.dueDay);
+  const overdueItems = isViewingCurrent ? allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "overdue").sort((a, b) => a.dueDay - b.dueDay) : [];
+  const soonItems = isViewingCurrent ? allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "soon").sort((a, b) => a.dueDay - b.dueDay) : [];
   const hasAlerts = overdueItems.length > 0 || soonItems.length > 0;
 
   return (
@@ -971,16 +1197,32 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
           <p className="text-[13px] mt-1" style={{ color: SLATE }}>Janeiro a Dezembro — registre entradas e saídas mês a mês.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setConfirmClear(true)} disabled={!allMonthTx.length}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost disabled:opacity-40"
-            style={{ border: `1px solid ${LINE}`, color: RUST }}>
-            <Eraser size={15} /> Zerar mês
-          </button>
-          <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium">
-            <Plus size={15} /> Novo lançamento
-          </button>
+          {archivedYearsList.length > 0 && (
+            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={inputCls} style={{ ...inputStyle, width: 160 }}>
+              <option value={currentYear}>{currentYear} (ano atual)</option>
+              {archivedYearsList.map((y) => <option key={y} value={y}>{y} (arquivado)</option>)}
+            </select>
+          )}
+          {isViewingCurrent && (
+            <>
+              <button onClick={() => setConfirmClear(true)} disabled={!allMonthTx.length}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost disabled:opacity-40"
+                style={{ border: `1px solid ${LINE}`, color: RUST }}>
+                <Eraser size={15} /> Zerar mês
+              </button>
+              <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium">
+                <Plus size={15} /> Novo lançamento
+              </button>
+            </>
+          )}
         </div>
       </header>
+
+      {!isViewingCurrent && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-4 text-[12.5px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+          <Archive size={14} /> Você está vendo o histórico arquivado de {selectedYear} — somente leitura, sem opção de adicionar, editar ou excluir.
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1">
         {MONTHS.map((m, i) => (
@@ -1081,15 +1323,17 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                         </td>
                         <td className="px-3 py-2.5 whitespace-nowrap" style={{ color: SLATE }}>{catById(t.categoryId)?.name} <span className="opacity-60">› {subById(t.categoryId, t.subId)?.name}</span></td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>dia {t.dueDay}</td>
-                        <td className="px-3 py-2.5 text-center"><StatusChip t={t} onClick={() => togglePaid(t.id)} /></td>
+                        <td className="px-3 py-2.5 text-center"><StatusChip t={t} onClick={isViewingCurrent ? () => togglePaid(t.id) : undefined} /></td>
                         <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: t.type === "income" ? SAGE : RUST }}>
                           {t.type === "income" ? "+" : "−"} {brl(t.amount)}
                         </td>
                         <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-1 justify-end">
-                            <button onClick={() => { setEditing(t); setModalOpen(true); }} className="p-1.5 rounded-md btn-ghost"><Pencil size={13} color={SLATE} /></button>
-                            <button onClick={() => deleteTransaction(t.id)} className="p-1.5 rounded-md btn-ghost"><Trash2 size={13} color={RUST} /></button>
-                          </div>
+                          {isViewingCurrent && (
+                            <div className="flex items-center gap-1 justify-end">
+                              <button onClick={() => { setEditing(t); setModalOpen(true); }} className="p-1.5 rounded-md btn-ghost"><Pencil size={13} color={SLATE} /></button>
+                              <button onClick={() => deleteTransaction(t.id)} className="p-1.5 rounded-md btn-ghost"><Trash2 size={13} color={RUST} /></button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1811,10 +2055,14 @@ function doPost(e) {
   const idCol = headers.indexOf("ID");
   const body = JSON.parse(e.postData.contents);
   const items = Array.isArray(body) ? body : [body];
-  const data = sheet.getDataRange().getValues();
 
-  items.forEach(item => {
+  const toDelete = items.filter(item => item._delete);
+  const toUpsert = items.filter(item => !item._delete);
+
+  // Upserts primeiro (atualiza se o ID já existe, senão adiciona no final)
+  toUpsert.forEach(item => {
     const rowValues = headers.map(h => item[h] ?? "");
+    const data = sheet.getDataRange().getValues();
     let rowIndex = -1;
     for (let i = 1; i < data.length; i++) {
       if (data[i][idCol] === item.ID) { rowIndex = i; break; }
@@ -1823,7 +2071,16 @@ function doPost(e) {
     else sheet.appendRow(rowValues);
   });
 
-  return ContentService.createTextOutput(JSON.stringify({ ok: true, count: items.length }))
+  // Exclusões — de baixo para cima, para não bagunçar os índices das linhas
+  if (toDelete.length) {
+    const idsToDelete = toDelete.map(item => item.ID);
+    const data = sheet.getDataRange().getValues();
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (idsToDelete.includes(data[i][idCol])) sheet.deleteRow(i + 1);
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, upserted: toUpsert.length, deleted: toDelete.length }))
     .setMimeType(ContentService.MimeType.JSON);
 }`;
 
@@ -1842,7 +2099,7 @@ function doPost(e) {
       <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid #C7DBD0` }}>
         <div className="flex items-center gap-2 mb-2"><RefreshCw size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold" style={{ color: SAGE }}>Sincronização bidirecional (recomendado)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: INK }}>
-          Busca o que já está preenchido na planilha e traz para cá, <b>e</b> envia para a planilha os lançamentos que já existem aqui e ainda não estão lá — os dois lados ficam com o mesmo conteúdo. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez.
+          Depois de configurar a URL abaixo, <b>todo lançamento que você criar, editar, marcar como pago ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
         </p>
         <Field label="URL do Apps Script Web App">
           <input value={sheetConfig.appsScriptUrl} onChange={(e) => setSheetConfig((s) => ({ ...s, appsScriptUrl: e.target.value }))} placeholder="https://script.google.com/macros/s/SEU_DEPLOY_ID/exec" className={inputCls} style={inputStyle} />

@@ -52,5 +52,11 @@ O app pede usuário e senha ao abrir. Credenciais padrão:
 - **Usuário:** `familia`
 - **Senha:** `meufinanceiro`
 
-**Troque isso antes de publicar!** Veja o comentário no topo de `src/App.jsx`, na constante `AUTH_CONFIG` — ele explica como gerar um novo hash e por que essa trava é apenas uma proteção básica do lado do cliente (não substitui autenticação de verdade num backend, nem a proteção por senha oferecida por provedores como a Vercel).
+Você pode trocar usuário e senha **dentro do próprio app**, no botão "Alterar usuário e senha" no rodapé do menu lateral (pede a senha atual para confirmar). Isso é salvo no `localStorage` do navegador — funciona normalmente depois de publicado (Vercel, StackBlitz etc.), mas **não persiste dentro do preview de artifacts do Claude.ai**, que bloqueia esse tipo de armazenamento; nesse caso a alteração vale só durante a sessão atual da aba.
+
+Se preferir trocar a credencial padrão diretamente no código (sem depender do navegador), veja o comentário no topo de `src/App.jsx`, na constante `AUTH_CONFIG`.
+
+## Sincronização com Google Sheets
+
+Depois de configurar a URL do Apps Script Web App na aba "Conexão Google Sheets", todo lançamento criado, editado, marcado como pago ou excluído é enviado automaticamente para a planilha (upsert por ID). O botão "Sincronizar agora" serve para trazer o que já estava na planilha e alinhar os dois lados na primeira vez.
 
