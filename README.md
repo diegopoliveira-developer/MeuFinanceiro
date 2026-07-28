@@ -23,14 +23,37 @@ npm run build
 ```
 
 Isso cria a pasta `dist/` com os arquivos estáticos prontos. Você pode:
-- Subir a pasta `dist/` em qualquer hospedagem estática (Vercel, Netlify, GitHub Pages, etc.)
+- Subir a pasta `dist/` em qualquer hospedagem estática (Vercel, Netlify, GitHub Pages, Firebase Hosting, etc.)
 - Ou testar localmente com `npm run preview`
+
+## Publicar no Firebase Hosting
+
+O projeto já vem com `firebase.json` pré-configurado (pasta pública `dist`, com rewrite de SPA). Passos:
+
+```bash
+# 1. Instale a CLI do Firebase (uma vez só, globalmente)
+npm install -g firebase-tools
+
+# 2. Faça login
+firebase login
+# Se estiver no WSL e o navegador não abrir sozinho:
+# firebase login --no-localhost
+
+# 3. Vincule este projeto a um projeto do Firebase (cria o .firebaserc)
+firebase use --add
+
+# 4. Build + deploy num comando só
+npm run deploy
+```
+
+O comando `npm run deploy` já faz `vite build` seguido de `firebase deploy --only hosting`. Toda vez que atualizar o código, é só rodar `npm run deploy` de novo.
 
 ## Estrutura do projeto
 
 ```
 meufinanceiro/
 ├── index.html          # HTML de entrada
+├── firebase.json        # config. do Firebase Hosting (pasta dist + rewrite de SPA)
 ├── src/
 │   ├── main.jsx        # ponto de entrada React
 │   ├── App.jsx         # o dashboard completo (todo o app está aqui)
