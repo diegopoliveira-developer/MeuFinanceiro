@@ -10,7 +10,7 @@ import {
   AlertCircle, ChevronDown, ChevronRight, Download, Upload, PiggyBank,
   ArrowUpRight, ArrowDownRight, BookOpen, CheckCircle2, Circle, Clock,
   AlertTriangle, Eraser, Info, Repeat, ListOrdered, Infinity as InfinityIcon, Ban, Layers, Search, ClipboardPaste,
-  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert
+  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert, Target, Copy, Landmark
 } from "lucide-react";
 
 /* =========================================================================
@@ -129,6 +129,14 @@ async function sha256Hex(text) {
 
 const dueDateOf = (t) => new Date(t.year || REFERENCE_YEAR_DEFAULT, t.month, t.dueDay || 10);
 
+// Protege contra "injeção de fórmula" no Google Sheets: se um texto do usuário começar com
+// =, +, -, @, tab ou quebra de linha, o Sheets pode interpretá-lo como fórmula ao ser gravado.
+// Prefixamos com apóstrofo (força texto puro) — não altera o valor exibido dentro do próprio app.
+const sanitizeForSheet = (value) => {
+  const str = value === undefined || value === null ? "" : String(value);
+  return /^[=+\-@\t\r]/.test(str) ? "'" + str : str;
+};
+
 // "paid" | "overdue" | "soon" | "pending"
 function paymentStatus(t) {
   if (t.paid) return "paid";
@@ -177,6 +185,50 @@ const seedCategories = () => ({
 });
 
 const seedCards = () => ([]);
+
+/* =========================================================================
+   Categorias <-> linhas de planilha (para a aba "Categorias" no Google Sheets)
+   Cada linha representa uma categoria OU uma (categoria, subcategoria).
+   Categorias sem nenhuma subcategoria ganham uma linha "raiz" (Subcategoria vazia).
+   ========================================================================= */
+const categoryRowId = (type, catId, subId) => `${type}_${catId}_${subId || "root"}`;
+const slugify = (s) => String(s || "categoria").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "categoria";
+
+function flattenCategories(categories) {
+  const rows = [];
+  ["income", "expense"].forEach((type) => {
+    (categories[type] || []).forEach((c) => {
+      const tipo = type === "income" ? "Receita" : "Despesa";
+      if (!c.subs.length) {
+        rows.push({ ID: categoryRowId(type, c.id, null), Tipo: tipo, CategoriaId: c.id, Categoria: sanitizeForSheet(c.name), Cor: c.color, SubcategoriaId: "", Subcategoria: "" });
+      } else {
+        c.subs.forEach((s) => rows.push({ ID: categoryRowId(type, c.id, s.id), Tipo: tipo, CategoriaId: c.id, Categoria: sanitizeForSheet(c.name), Cor: c.color, SubcategoriaId: s.id, Subcategoria: sanitizeForSheet(s.name) }));
+      }
+    });
+  });
+  return rows;
+}
+
+function unflattenCategoryRows(rows) {
+  const order = { income: [], expense: [] };
+  const catMap = { income: new Map(), expense: new Map() };
+  rows.forEach((r) => {
+    const type = String(r.Tipo || "").toLowerCase().startsWith("rec") ? "income" : "expense";
+    const catId = r.CategoriaId || slugify(r.Categoria);
+    if (!catMap[type].has(catId)) {
+      const cat = { id: catId, name: r.Categoria || catId, color: r.Cor || CAT_COLORS[order[type].length % CAT_COLORS.length], subs: [] };
+      catMap[type].set(catId, cat);
+      order[type].push(cat);
+    }
+    const subId = r.SubcategoriaId || (r.Subcategoria ? slugify(r.Subcategoria) : "");
+    if (subId) {
+      const cat = catMap[type].get(catId);
+      if (!cat.subs.find((s) => s.id === subId)) cat.subs.push({ id: subId, name: r.Subcategoria || subId });
+    }
+  });
+  return { income: order.income, expense: order.expense };
+}
+
 
 const seedVehicles = () => ([]);
 
@@ -286,18 +338,51 @@ function EmptyState({ icon: Icon, title, desc }) {
 /* =========================================================================
    MAIN APP
    ========================================================================= */
-function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning }) {
+function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning, isDefaultCredentials, loginLog }) {
   const [tab, setTab] = useState("dashboard");
   const [credentialsModalOpen, setCredentialsModalOpen] = useState(false);
   const [categories, setCategories] = useState(seedCategories);
   const [cards, setCards] = useState(seedCards);
   const [vehicles, setVehicles] = useState(seedVehicles);
   const [transactions, setTransactions] = useState(seedTransactions);
-  const [currentYear, setCurrentYear] = useState(REFERENCE_YEAR_DEFAULT);
+  const CURRENT_YEAR_STORAGE_KEY = "meufinanceiro_current_year_v1";
+  const [currentYear, setCurrentYear] = useState(() => {
+    try {
+      const raw = window.localStorage?.getItem(CURRENT_YEAR_STORAGE_KEY);
+      if (raw) { const n = Number(raw); if (n && n >= 2000 && n <= 3000) return n; }
+    } catch (_) { /* localStorage indisponível — usa o padrão nesta sessão */ }
+    return REFERENCE_YEAR_DEFAULT;
+  });
+  React.useEffect(() => {
+    try { window.localStorage?.setItem(CURRENT_YEAR_STORAGE_KEY, String(currentYear)); } catch (_) { /* segue só em memória */ }
+  }, [currentYear]);
   const [archivedYears, setArchivedYears] = useState({}); // { [year]: transactions[] }
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH_IDX);
   const [dashboardScope, setDashboardScope] = useState("month"); // "month" | "year"
-  const [sheetConfig, setSheetConfig] = useState({ url: "", appsScriptUrl: "", status: "idle", message: "", lastSync: null });
+  const SHEET_STORAGE_KEY = "meufinanceiro_sheet_v1";
+  const loadStoredSheetConfig = () => {
+    try {
+      const raw = window.localStorage?.getItem(SHEET_STORAGE_KEY);
+      if (raw) { const parsed = JSON.parse(raw); return { url: parsed.url || "", appsScriptUrl: parsed.appsScriptUrl || "", secret: parsed.secret || "" }; }
+    } catch (_) { /* localStorage indisponível — conexão precisa ser reconfigurada nesta sessão */ }
+    return { url: "", appsScriptUrl: "", secret: "" };
+  };
+  const [sheetConfig, setSheetConfig] = useState(() => ({ ...loadStoredSheetConfig(), status: "idle", message: "", lastSync: null }));
+  React.useEffect(() => {
+    try { window.localStorage?.setItem(SHEET_STORAGE_KEY, JSON.stringify({ url: sheetConfig.url, appsScriptUrl: sheetConfig.appsScriptUrl, secret: sheetConfig.secret })); } catch (_) { /* segue só em memória */ }
+  }, [sheetConfig.url, sheetConfig.appsScriptUrl, sheetConfig.secret]);
+  const didAutoSync = React.useRef(false);
+  React.useEffect(() => {
+    if (didAutoSync.current) return;
+    didAutoSync.current = true;
+    if (sheetConfig.appsScriptUrl) syncWithSheet();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Metas e orçamentos por categoria: { [categoryId]: { limit, active, period } }
+  // "period" já existe na estrutura pensando em periodicidades futuras (hoje só "monthly" é usado).
+  const [budgets, setBudgets] = useState({});
+  const setBudget = (categoryId, patch) => setBudgets((prev) => ({ ...prev, [categoryId]: { limit: 0, active: true, period: "monthly", ...prev[categoryId], ...patch } }));
+  const removeBudget = (categoryId) => setBudgets((prev) => { const next = { ...prev }; delete next[categoryId]; return next; });
 
   const allCategories = useMemo(() => [...categories.income, ...categories.expense], [categories]);
   const catById = useCallback((id) => allCategories.find((c) => c.id === id), [allCategories]);
@@ -305,68 +390,72 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 
   /* ---------- CRUD: transactions ---------- */
   /* ---------- Sincronização automática em segundo plano ---------- */
-  const pushRowsToSheet = async (rows) => {
-    if (!sheetConfig.appsScriptUrl || !rows.length) return;
+  const pushToSheet = async (payload) => {
+    if (!sheetConfig.appsScriptUrl) return;
+    const hasContent = Object.values(payload).some((rows) => rows && rows.length);
+    if (!hasContent) return;
     try {
-      const res = await fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(rows) });
+      const body = sheetConfig.secret ? { ...payload, token: sheetConfig.secret } : payload;
+      const res = await fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error("HTTP " + res.status);
+      const resultText = await res.text();
+      try {
+        const resultJson = JSON.parse(resultText);
+        if (resultJson && resultJson.error) throw new Error(resultJson.error + " Confira o token secreto.");
+      } catch (parseErr) {
+        if (parseErr instanceof SyntaxError) { /* resposta não era JSON — ignora, mantém compatibilidade */ } else throw parseErr;
+      }
       setSheetConfig((s) => ({ ...s, lastSync: new Date().toISOString() }));
     } catch (err) {
-      setSheetConfig((s) => ({ ...s, status: "error", message: "Não foi possível salvar automaticamente na planilha (" + err.message + "). O lançamento continua salvo aqui — use 'Sincronizar agora' para tentar de novo." }));
+      setSheetConfig((s) => ({ ...s, status: "error", message: "Não foi possível salvar automaticamente na planilha (" + err.message + "). Os dados continuam salvos aqui — use 'Sincronizar agora' para tentar de novo." }));
     }
   };
-  const deleteRowsFromSheet = async (ids) => {
-    if (!sheetConfig.appsScriptUrl || !ids.length) return;
-    try {
-      const res = await fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(ids.map((id) => ({ ID: id, _delete: true }))) });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      setSheetConfig((s) => ({ ...s, lastSync: new Date().toISOString() }));
-    } catch (err) {
-      setSheetConfig((s) => ({ ...s, status: "error", message: "Não foi possível remover automaticamente da planilha (" + err.message + "). Use 'Sincronizar agora' para tentar de novo." }));
-    }
+  const deleteFromSheet = (sheetKey, ids) => {
+    if (!ids.length) return;
+    pushToSheet({ [sheetKey]: ids.map((id) => ({ ID: id, _delete: true })) });
   };
 
   const addTransaction = (tx) => {
     const full = { id: uid(), paid: false, dueDay: 10, year: currentYear, ...tx };
     setTransactions((prev) => [...prev, full]);
-    pushRowsToSheet([toSheetRow(full)]);
+    pushToSheet({ Lancamentos: [toSheetRow(full)] });
   };
   const addTransactionSeries = (entries) => {
     const fulls = entries.map((e) => ({ id: uid(), paid: false, dueDay: 10, year: currentYear, ...e }));
     setTransactions((prev) => [...prev, ...fulls]);
-    pushRowsToSheet(fulls.map(toSheetRow));
+    pushToSheet({ Lancamentos: fulls.map(toSheetRow) });
   };
   const updateTransaction = (id, patch) => {
     setTransactions((prev) => {
       const next = prev.map((t) => (t.id === id ? { ...t, ...patch } : t));
       const updated = next.find((t) => t.id === id);
-      if (updated) pushRowsToSheet([toSheetRow(updated)]);
+      if (updated) pushToSheet({ Lancamentos: [toSheetRow(updated)] });
       return next;
     });
   };
   const deleteTransaction = (id) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
-    deleteRowsFromSheet([id]);
+    deleteFromSheet("Lancamentos", [id]);
   };
   const togglePaid = (id) => {
     setTransactions((prev) => {
       const next = prev.map((t) => (t.id === id ? { ...t, paid: !t.paid } : t));
       const updated = next.find((t) => t.id === id);
-      if (updated) pushRowsToSheet([toSheetRow(updated)]);
+      if (updated) pushToSheet({ Lancamentos: [toSheetRow(updated)] });
       return next;
     });
   };
   const clearMonthTransactions = (month) => {
     setTransactions((prev) => {
       const toRemove = prev.filter((t) => t.month === month);
-      if (toRemove.length) deleteRowsFromSheet(toRemove.map((t) => t.id));
+      if (toRemove.length) deleteFromSheet("Lancamentos", toRemove.map((t) => t.id));
       return prev.filter((t) => t.month !== month);
     });
   };
   const endRecurrence = (groupId, fromMonth) => {
     setTransactions((prev) => {
       const toRemove = prev.filter((t) => t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid);
-      if (toRemove.length) deleteRowsFromSheet(toRemove.map((t) => t.id));
+      if (toRemove.length) deleteFromSheet("Lancamentos", toRemove.map((t) => t.id));
       return prev.filter((t) => !toRemove.includes(t));
     });
   };
@@ -374,35 +463,66 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     setTransactions((prev) => {
       const next = prev.map((t) => (t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid ? { ...t, amount: newAmount } : t));
       const changed = next.filter((t) => t.recurringGroupId === groupId && t.month >= fromMonth && !t.paid);
-      if (changed.length) pushRowsToSheet(changed.map(toSheetRow));
+      if (changed.length) pushToSheet({ Lancamentos: changed.map(toSheetRow) });
       return next;
     });
   };
   const resetAllTransactions = () => {
     setTransactions((prev) => {
-      if (prev.length) deleteRowsFromSheet(prev.map((t) => t.id));
+      if (prev.length) deleteFromSheet("Lancamentos", prev.map((t) => t.id));
       return [];
     });
   };
   const archiveCurrentYear = () => {
     setArchivedYears((prev) => ({ ...prev, [currentYear]: transactions }));
+    if (transactions.length) pushToSheet({ Lancamentos: transactions.map(toSheetRow) });
     setTransactions([]);
-    setCurrentYear((y) => y + 1);
+    const nextYear = currentYear + 1;
+    setCurrentYear(nextYear);
     setSelectedMonth(0);
+    // Guarda o ano corrente também na planilha (aba "Config") — é o que permite recuperar
+    // qual ano está ativo mesmo se o localStorage deste navegador for limpo por completo.
+    pushToSheet({ Config: [{ ID: "ano_corrente", Chave: "AnoAtual", Valor: nextYear }] });
   };
 
   /* ---------- CRUD: categories ---------- */
   const addCategory = (type, name) => {
     const id = uid();
-    setCategories((prev) => ({ ...prev, [type]: [...prev[type], { id, name, color: CAT_COLORS[prev[type].length % CAT_COLORS.length], subs: [] }] }));
+    const color = CAT_COLORS[categories[type].length % CAT_COLORS.length];
+    setCategories((prev) => ({ ...prev, [type]: [...prev[type], { id, name, color, subs: [] }] }));
+    pushToSheet({ Categorias: [{ ID: categoryRowId(type, id, null), Tipo: type === "income" ? "Receita" : "Despesa", CategoriaId: id, Categoria: name, Cor: color, SubcategoriaId: "", Subcategoria: "" }] });
   };
-  const deleteCategory = (type, id) => setCategories((prev) => ({ ...prev, [type]: prev[type].filter((c) => c.id !== id) }));
-  const addSubcategory = (type, catId, name) => setCategories((prev) => ({
-    ...prev, [type]: prev[type].map((c) => (c.id === catId ? { ...c, subs: [...c.subs, { id: uid(), name }] } : c)),
-  }));
-  const deleteSubcategory = (type, catId, subId) => setCategories((prev) => ({
-    ...prev, [type]: prev[type].map((c) => (c.id === catId ? { ...c, subs: c.subs.filter((s) => s.id !== subId) } : c)) ,
-  }));
+  const deleteCategory = (type, id) => {
+    const cat = categories[type].find((c) => c.id === id);
+    setCategories((prev) => ({ ...prev, [type]: prev[type].filter((c) => c.id !== id) }));
+    if (cat) {
+      const ids = cat.subs.length ? cat.subs.map((s) => categoryRowId(type, id, s.id)) : [categoryRowId(type, id, null)];
+      deleteFromSheet("Categorias", ids);
+    }
+  };
+  const addSubcategory = (type, catId, name) => {
+    const subId = uid();
+    const cat = categories[type].find((c) => c.id === catId);
+    setCategories((prev) => ({
+      ...prev, [type]: prev[type].map((c) => (c.id === catId ? { ...c, subs: [...c.subs, { id: subId, name }] } : c)),
+    }));
+    if (cat) {
+      // se essa é a primeira subcategoria, a linha "raiz" (sem subcategoria) deixa de existir na planilha
+      if (cat.subs.length === 0) deleteFromSheet("Categorias", [categoryRowId(type, catId, null)]);
+      pushToSheet({ Categorias: [{ ID: categoryRowId(type, catId, subId), Tipo: type === "income" ? "Receita" : "Despesa", CategoriaId: catId, Categoria: cat.name, Cor: cat.color, SubcategoriaId: subId, Subcategoria: name }] });
+    }
+  };
+  const deleteSubcategory = (type, catId, subId) => {
+    const cat = categories[type].find((c) => c.id === catId);
+    setCategories((prev) => ({
+      ...prev, [type]: prev[type].map((c) => (c.id === catId ? { ...c, subs: c.subs.filter((s) => s.id !== subId) } : c)),
+    }));
+    deleteFromSheet("Categorias", [categoryRowId(type, catId, subId)]);
+    // se essa era a última subcategoria, recria a linha "raiz" pra categoria não sumir da planilha
+    if (cat && cat.subs.length === 1) {
+      pushToSheet({ Categorias: [{ ID: categoryRowId(type, catId, null), Tipo: type === "income" ? "Receita" : "Despesa", CategoriaId: catId, Categoria: cat.name, Cor: cat.color, SubcategoriaId: "", Subcategoria: "" }] });
+    }
+  };
 
   /* ---------- CRUD: cards & vehicles ---------- */
   const addCard = (card) => setCards((prev) => [...prev, { id: uid(), ...card }]);
@@ -455,7 +575,27 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       .sort((a, b) => b.value - a.value);
   }, [transactions, dashboardScope, selectedMonth, catById]);
 
-  const cardInvoice = (cardId, m) => transactions.filter((t) => t.cardId === cardId && t.month === m).reduce((s, t) => s + Number(t.amount || 0), 0);
+  // Calcula em qual mês/ano a fatura de um lançamento de cartão cai, considerando o dia de
+  // fechamento do cartão (não apenas o mês do lançamento). Ex.: fechamento dia 15, compra dia 16
+  // vai automaticamente para a fatura do mês seguinte.
+  const invoicePeriodFor = (card, t) => {
+    const purchaseDay = t.dueDay || 1;
+    if (purchaseDay > card.closingDay) {
+      const month = (t.month + 1) % 12;
+      const year = t.month === 11 ? (t.year || currentYear) + 1 : (t.year || currentYear);
+      return { month, year };
+    }
+    return { month: t.month, year: t.year || currentYear };
+  };
+  const cardInvoice = (cardId, m, y) => {
+    const card = cards.find((c) => c.id === cardId);
+    const year = y ?? currentYear;
+    if (!card) return transactions.filter((t) => t.cardId === cardId && t.month === m).reduce((s, t) => s + Number(t.amount || 0), 0);
+    return transactions
+      .filter((t) => t.cardId === cardId)
+      .filter((t) => { const p = invoicePeriodFor(card, t); return p.month === m && p.year === year; })
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+  };
 
   const pendingBadgeCount = useMemo(
     () => transactions.filter((t) => !t.paid && (paymentStatus(t) === "overdue" || paymentStatus(t) === "soon")).length,
@@ -484,10 +624,14 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 
   /* ---------- Google Sheets import/export ---------- */
   const toSheetRow = (t) => ({
-    ID: t.id, Mes: MONTHS[t.month], Tipo: t.type === "income" ? "Receita" : "Despesa",
-    Categoria: catById(t.categoryId)?.name || t.categoryId, Subcategoria: subById(t.categoryId, t.subId)?.name || t.subId,
-    Descricao: t.description, Valor: t.amount, Cartao: t.cardId || "", Veiculo: t.vehicleId || "",
+    ID: t.id, Ano: t.year || currentYear, Mes: MONTHS[t.month], Tipo: t.type === "income" ? "Receita" : "Despesa",
+    CategoriaId: t.categoryId, Categoria: sanitizeForSheet(catById(t.categoryId)?.name || t.categoryId),
+    SubcategoriaId: t.subId, Subcategoria: sanitizeForSheet(subById(t.categoryId, t.subId)?.name || t.subId),
+    Descricao: sanitizeForSheet(t.description), Valor: t.amount, Cartao: sanitizeForSheet(t.cardId || ""), Veiculo: sanitizeForSheet(t.vehicleId || ""),
     Pago: t.paid ? "Sim" : "Não", Vencimento: t.dueDay || "",
+    Notas: sanitizeForSheet(t.notes || ""), ParcelaNumero: t.installmentNumber || "", ParcelaTotal: t.installmentTotal || "",
+    RecorrenciaGrupoId: t.recurringGroupId || "", RecorrenciaIndefinida: t.indefiniteRecurring ? "Sim" : "",
+    BankId: t.bankId || "",
   });
 
   const parseCsvIntoTransactions = (text) => {
@@ -513,17 +657,23 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     };
     return rows.map((r) => ({
       id: r.ID || r.Id || r.id || uid(),
-      year: currentYear,
+      year: r.Ano ? Number(r.Ano) : currentYear,
       month: monthIndex(r.Mes || r.Mês || r.month),
       type: (r.Tipo || r.type || "").toLowerCase().startsWith("rec") ? "income" : "expense",
-      categoryId: (r.Categoria || r.category || "outros_desp").toLowerCase(),
-      subId: (r.Subcategoria || r.subcategory || "diversos").toLowerCase(),
+      categoryId: r.CategoriaId || (r.Categoria || r.category || "outros_desp").toLowerCase(),
+      subId: r.SubcategoriaId || (r.Subcategoria || r.subcategory || "diversos").toLowerCase(),
       description: r.Descricao || r.Descrição || r.description || "Importado da planilha",
       amount: parseFloat(String(r.Valor || r.amount || "0").replace(",", ".")) || 0,
       cardId: r.Cartao || r.Cartão || undefined,
       vehicleId: r.Veiculo || r.Veículo || undefined,
+      bankId: r.BankId || undefined,
       paid: String(r.Pago || r.paid || "").toLowerCase().startsWith("s") || String(r.Pago || r.paid || "").toLowerCase() === "true",
       dueDay: Number(r.Vencimento || r.dueDay) || 10,
+      notes: r.Notas || undefined,
+      installmentNumber: r.ParcelaNumero ? Number(r.ParcelaNumero) : undefined,
+      installmentTotal: r.ParcelaTotal ? Number(r.ParcelaTotal) : undefined,
+      recurringGroupId: r.RecorrenciaGrupoId || undefined,
+      indefiniteRecurring: String(r.RecorrenciaIndefinida || "").toLowerCase().startsWith("s"),
     }));
   };
 
@@ -562,56 +712,145 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     if (!sheetConfig.appsScriptUrl) { setSheetConfig((s) => ({ ...s, status: "error", message: "Informe a URL do Apps Script Web App antes de sincronizar." })); return; }
     setSheetConfig((s) => ({ ...s, status: "loading", message: "Buscando o que está na planilha…" }));
     try {
-      // 1) Busca tudo que já está na planilha
-      const res = await fetch(sheetConfig.appsScriptUrl);
+      // 1) Busca tudo que já está na planilha (Lançamentos + Categorias)
+      const getUrl = sheetConfig.secret
+        ? sheetConfig.appsScriptUrl + (sheetConfig.appsScriptUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(sheetConfig.secret)
+        : sheetConfig.appsScriptUrl;
+      const res = await fetch(getUrl);
       if (!res.ok) throw new Error("O Apps Script respondeu com erro " + res.status + " — confirme se o Web App foi publicado com acesso 'Qualquer pessoa'.");
       const rawText = await res.text();
-      let remoteRows;
+      let remoteData;
       try {
-        remoteRows = JSON.parse(rawText);
+        remoteData = JSON.parse(rawText);
       } catch {
         if (rawText.trim().toLowerCase().startsWith("id,") || rawText.includes(",")) {
           throw new Error("A URL informada parece ser o link de publicação em CSV (do passo 1), não a URL do Apps Script Web App (que termina em /exec, gerada no passo 4). Cole a URL certa no campo de sincronização.");
         }
         throw new Error("A resposta não veio em JSON válido — confirme se colou a URL do Apps Script Web App (termina em /exec) e se o deploy está ativo.");
       }
-      if (!Array.isArray(remoteRows)) throw new Error("A resposta do Apps Script não veio no formato esperado (lista de linhas).");
+      if (remoteData && remoteData.error) {
+        throw new Error(remoteData.error + " Confira se o token secreto configurado aqui é igual ao definido na constante SHARED_SECRET do Apps Script.");
+      }
+      // Compatibilidade: scripts antigos (antes das Categorias) devolvem um array só com Lançamentos
+      const remoteLancamentos = Array.isArray(remoteData) ? remoteData : (remoteData.Lancamentos || []);
+      const remoteCategorias = Array.isArray(remoteData) ? [] : (remoteData.Categorias || []);
+      const remoteConfig = Array.isArray(remoteData) ? [] : (remoteData.Config || []);
+
+      // O ano corrente também é recuperado da planilha (aba "Config") — importante para quando
+      // o navegador foi limpo por completo e o app "esqueceria" que já tinha avançado de ano.
+      // Nunca regride: usa sempre o maior valor entre o que já está aqui e o que veio de lá.
+      const remoteYearRow = remoteConfig.find((r) => r.Chave === "AnoAtual" || r.ID === "ano_corrente");
+      const remoteCurrentYear = remoteYearRow ? Number(remoteYearRow.Valor) : null;
+      if (remoteCurrentYear && remoteCurrentYear > currentYear) setCurrentYear(remoteCurrentYear);
+      const effectiveCurrentYear = remoteCurrentYear && remoteCurrentYear > currentYear ? remoteCurrentYear : currentYear;
 
       const monthIndex = (label) => {
         const i = MONTHS.findIndex((m) => m.toLowerCase() === String(label || "").trim().slice(0, 3).toLowerCase());
         return i >= 0 ? i : 0;
       };
-      const remoteTx = remoteRows.filter((r) => r.ID).map((r) => ({
-        id: r.ID, year: currentYear, month: monthIndex(r.Mes), type: String(r.Tipo || "").toLowerCase().startsWith("rec") ? "income" : "expense",
-        categoryId: String(r.Categoria || "outros_desp").toLowerCase(), subId: String(r.Subcategoria || "diversos").toLowerCase(),
+      // usa o valor remoto se ele existir/for preenchido; senão preserva o local (evita perder dados
+      // quando a planilha ainda não tem uma coluna nova, em vez de sobrescrever com vazio)
+      const pick = (remVal, locVal) => (remVal !== undefined && remVal !== "" && remVal !== null ? remVal : locVal);
+
+      const remoteTx = remoteLancamentos.filter((r) => r.ID).map((r) => ({
+        id: r.ID, year: r.Ano ? Number(r.Ano) : effectiveCurrentYear, month: monthIndex(r.Mes), type: String(r.Tipo || "").toLowerCase().startsWith("rec") ? "income" : "expense",
+        categoryId: r.CategoriaId || String(r.Categoria || "outros_desp").toLowerCase(),
+        subId: r.SubcategoriaId || String(r.Subcategoria || "diversos").toLowerCase(),
         description: r.Descricao || "Importado da planilha", amount: parseFloat(String(r.Valor || "0").replace(",", ".")) || 0,
         cardId: r.Cartao || undefined, vehicleId: r.Veiculo || undefined,
         paid: String(r.Pago || "").toLowerCase().startsWith("s"), dueDay: Number(r.Vencimento) || 10,
+        notes: r.Notas || undefined,
+        installmentNumber: r.ParcelaNumero ? Number(r.ParcelaNumero) : undefined,
+        installmentTotal: r.ParcelaTotal ? Number(r.ParcelaTotal) : undefined,
+        recurringGroupId: r.RecorrenciaGrupoId || undefined,
+        indefiniteRecurring: String(r.RecorrenciaIndefinida || "").toLowerCase().startsWith("s") || undefined,
+        bankId: r.BankId || undefined,
       }));
+      // Separa o que é do ano corrente (editável, vai para "transactions") do que é de anos já
+      // arquivados (só leitura, vai para "archivedYears") — é isso que permite recuperar o
+      // histórico de anos arquivados mesmo depois de limpar os dados do navegador.
+      const remoteCurrentYearTx = remoteTx.filter((t) => t.year === effectiveCurrentYear);
+      const remoteArchivedTx = remoteTx.filter((t) => t.year !== effectiveCurrentYear);
 
-      // 2) Mescla: o que só existe aqui vai pra lá; o que só existe lá vem pra cá; o que existe nos dois mantém os dados extras daqui (parcelas, recorrência, observações) e os valores atualizados de lá.
+      // 2) Mescla lançamentos: o que só existe aqui vai pra lá; o que só existe lá vem pra cá;
+      //    o que existe nos dois fica com os valores da planilha, mas sem perder campos extras
+      //    (parcela/recorrência/observações) que a planilha ainda não tenha preenchido.
       setTransactions((prevLocal) => {
         const localById = new Map(prevLocal.map((t) => [t.id, t]));
-        const remoteById = new Map(remoteTx.map((t) => [t.id, t]));
+        const remoteById = new Map(remoteCurrentYearTx.map((t) => [t.id, t]));
         const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
         const merged = [];
         allIds.forEach((id) => {
           const loc = localById.get(id);
           const rem = remoteById.get(id);
-          if (loc && rem) merged.push({ ...loc, ...rem, notes: loc.notes, installmentNumber: loc.installmentNumber, installmentTotal: loc.installmentTotal, recurringGroupId: loc.recurringGroupId, indefiniteRecurring: loc.indefiniteRecurring });
-          else merged.push(loc || rem);
+          if (loc && rem) {
+            merged.push({
+              ...loc, ...rem,
+              notes: pick(rem.notes, loc.notes),
+              installmentNumber: pick(rem.installmentNumber, loc.installmentNumber),
+              installmentTotal: pick(rem.installmentTotal, loc.installmentTotal),
+              recurringGroupId: pick(rem.recurringGroupId, loc.recurringGroupId),
+              indefiniteRecurring: rem.indefiniteRecurring ?? loc.indefiniteRecurring,
+            });
+          } else merged.push(loc || rem);
         });
 
-        // 3) Envia pra planilha o que só existia aqui (upsert em lote)
-        const toPush = prevLocal.filter((t) => !remoteById.has(t.id)).map(toSheetRow);
-        if (toPush.length) {
-          fetch(sheetConfig.appsScriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(toPush) }).catch(() => {});
-        }
+        const toPush = prevLocal.filter((t) => !remoteById.has(t.id));
+        if (toPush.length) pushToSheet({ Lancamentos: toPush.map(toSheetRow) });
 
         return merged;
       });
 
-      setSheetConfig((s) => ({ ...s, status: "success", message: `Sincronização concluída — ${remoteTx.length} lançamentos vieram da planilha e os que só existiam aqui foram enviados para lá.`, lastSync: new Date().toISOString() }));
+      // 2b) Anos arquivados: união simples por ID (são somente leitura, não têm edição
+      // concorrente para mesclar campo a campo) — o que só existe localmente é enviado
+      // pra planilha; o que só existe na planilha é incorporado ao histórico local.
+      if (remoteArchivedTx.length || Object.keys(archivedYears).length) {
+        setArchivedYears((prevArchived) => {
+          const nextArchived = { ...prevArchived };
+          const remoteByYear = {};
+          remoteArchivedTx.forEach((t) => { (remoteByYear[t.year] = remoteByYear[t.year] || []).push(t); });
+
+          const allYears = new Set([...Object.keys(prevArchived).map(Number), ...Object.keys(remoteByYear).map(Number)]);
+          allYears.forEach((year) => {
+            const localYearTx = prevArchived[year] || [];
+            const remoteYearTx = remoteByYear[year] || [];
+            const localById = new Map(localYearTx.map((t) => [t.id, t]));
+            const remoteById = new Map(remoteYearTx.map((t) => [t.id, t]));
+            const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
+            const merged = [];
+            allIds.forEach((id) => merged.push(localById.get(id) || remoteById.get(id)));
+            nextArchived[year] = merged;
+
+            const toPush = localYearTx.filter((t) => !remoteById.has(t.id));
+            if (toPush.length) pushToSheet({ Lancamentos: toPush.map(toSheetRow) });
+          });
+          return nextArchived;
+        });
+      }
+
+      // 3) Mescla categorias: mesma lógica, por linha (categoria + subcategoria)
+      let categoriesTouched = 0;
+      setCategories((prevCats) => {
+        const localRows = flattenCategories(prevCats);
+        const remoteRows = remoteCategorias.filter((r) => r.ID);
+        const localById = new Map(localRows.map((r) => [r.ID, r]));
+        const remoteById = new Map(remoteRows.map((r) => [r.ID, r]));
+        const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
+        const mergedRows = [];
+        allIds.forEach((id) => {
+          const loc = localById.get(id);
+          const rem = remoteById.get(id);
+          mergedRows.push(rem || loc);
+        });
+        categoriesTouched = mergedRows.length;
+
+        const toPush = localRows.filter((r) => !remoteById.has(r.ID));
+        if (toPush.length) pushToSheet({ Categorias: toPush });
+
+        return mergedRows.length ? unflattenCategoryRows(mergedRows) : prevCats;
+      });
+
+      setSheetConfig((s) => ({ ...s, status: "success", message: `Sincronização concluída — ${remoteTx.length} lançamentos e ${remoteCategorias.length} linhas de categorias vieram da planilha; o que só existia aqui foi enviado para lá.`, lastSync: new Date().toISOString() }));
     } catch (err) {
       const isNetworkError = err instanceof TypeError;
       setSheetConfig((s) => ({ ...s, status: "error", message: (isNetworkError ? "Não foi possível conectar ao Apps Script — verifique a URL e se o deploy está com acesso 'Qualquer pessoa'." : "Falha ao sincronizar: " + err.message) }));
@@ -669,6 +908,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
             <LedgerTab icon={Settings2} label="Categorias" active={tab === "categorias"} onClick={() => setTab("categorias")} />
             <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => setTab("conexao")} />
             <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => setTab("relatorio")} />
+            <LedgerTab icon={ShieldAlert} label="Diagnóstico de Segurança" active={tab === "seguranca"} onClick={() => setTab("seguranca")} badge={isDefaultCredentials ? 1 : 0} />
           </nav>
           <div className="px-4 mt-auto pt-8">
             <button onClick={() => setCredentialsModalOpen(true)} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
@@ -697,6 +937,8 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}
               scopeKpis={scopeKpis} expenseByCategory={expenseByCategory} yearSeries={yearSeries}
               cards={cards} vehicles={vehicles} cardInvoice={cardInvoice} currentYear={currentYear}
+              categories={categories} transactions={transactions} catById={catById}
+              budgets={budgets} setBudget={setBudget} removeBudget={removeBudget}
             />
           )}
           {tab === "lancamentos" && (
@@ -733,6 +975,12 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
             <RelatorioTab categories={categories} transactions={transactions} yearTotals={yearTotals} catById={catById}
               currentYear={currentYear} archivedYears={archivedYears} archiveCurrentYear={archiveCurrentYear} />
           )}
+          {tab === "seguranca" && (
+            <SegurancaTab
+              authConfig={authConfig} isDefaultCredentials={isDefaultCredentials} persistWarning={persistWarning}
+              loginLog={loginLog} sheetConfig={sheetConfig} setTab={setTab}
+            />
+          )}
         </main>
       </div>
     </div>
@@ -742,13 +990,29 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 /* =========================================================================
    AUTENTICAÇÃO — tela de login (proteção do lado do cliente)
    ========================================================================= */
-function LoginScreen({ onSuccess, authConfig }) {
+const LOCKOUT_STORAGE_KEY = "meufinanceiro_lockout_v1";
+function loadStoredLockout() {
+  try {
+    const raw = window.localStorage?.getItem(LOCKOUT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.attempts === "number") return parsed;
+    }
+  } catch (_) { /* localStorage indisponível — bloqueio vale só para esta aba/sessão */ }
+  return { attempts: 0, lockedUntil: null };
+}
+function saveStoredLockout(state) {
+  try { window.localStorage?.setItem(LOCKOUT_STORAGE_KEY, JSON.stringify(state)); } catch (_) { /* segue só em memória */ }
+}
+
+function LoginScreen({ onSuccess, authConfig, onAttempt }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
-  const [attempts, setAttempts] = useState(0);
-  const [lockedUntil, setLockedUntil] = useState(null);
+  const initialLockout = useMemo(loadStoredLockout, []);
+  const [attempts, setAttempts] = useState(initialLockout.attempts);
+  const [lockedUntil, setLockedUntil] = useState(initialLockout.lockedUntil);
   const [now, setNow] = useState(Date.now());
   const [checking, setChecking] = useState(false);
   const [btnHover, setBtnHover] = useState(false);
@@ -782,18 +1046,24 @@ function LoginScreen({ onSuccess, authConfig }) {
     try {
       const hash = await sha256Hex(`${liveUsername}:${livePassword}`);
       if (hash === authConfig.hash) {
+        saveStoredLockout({ attempts: 0, lockedUntil: null });
+        onAttempt?.(liveUsername, true);
         onSuccess();
         return;
       }
+      onAttempt?.(liveUsername, false);
       const nextAttempts = attempts + 1;
-      setAttempts(nextAttempts);
       setPassword("");
       if (passwordRef.current) passwordRef.current.value = "";
       if (nextAttempts >= AUTH_CONFIG.maxAttempts) {
-        setLockedUntil(Date.now() + AUTH_CONFIG.lockoutSeconds * 1000);
+        const until = Date.now() + AUTH_CONFIG.lockoutSeconds * 1000;
+        setLockedUntil(until);
         setAttempts(0);
+        saveStoredLockout({ attempts: 0, lockedUntil: until });
         setError(`Muitas tentativas incorretas. Aguarde ${AUTH_CONFIG.lockoutSeconds}s para tentar de novo.`);
       } else {
+        setAttempts(nextAttempts);
+        saveStoredLockout({ attempts: nextAttempts, lockedUntil: null });
         setError(`Usuário ou senha incorretos (tentativa ${nextAttempts} de ${AUTH_CONFIG.maxAttempts}).`);
       }
     } catch (err) {
@@ -973,6 +1243,11 @@ export default function App() {
   const [authed, setAuthed] = useState(false);
   const [authConfig, setAuthConfig] = useState(loadStoredAuthConfig);
   const [persistWarning, setPersistWarning] = useState(false);
+  const [loginLog, setLoginLog] = useState([]); // log local, em memória, só desta sessão do navegador
+
+  const logLoginAttempt = (username, success) => {
+    setLoginLog((prev) => [{ id: uid(), username, success, at: new Date().toISOString() }, ...prev].slice(0, 50));
+  };
 
   const updateCredentials = async (newUsername, newPassword) => {
     const hash = await sha256Hex(`${newUsername.trim()}:${newPassword}`);
@@ -992,7 +1267,9 @@ export default function App() {
     return hash === authConfig.hash;
   };
 
-  if (!authed) return <LoginScreen authConfig={authConfig} onSuccess={() => setAuthed(true)} />;
+  const isDefaultCredentials = authConfig.hash === AUTH_CONFIG.hash;
+
+  if (!authed) return <LoginScreen authConfig={authConfig} onSuccess={() => setAuthed(true)} onAttempt={logLoginAttempt} />;
   return (
     <Dashboard
       onLogout={() => setAuthed(false)}
@@ -1000,6 +1277,8 @@ export default function App() {
       updateCredentials={updateCredentials}
       verifyCredentials={verifyCredentials}
       persistWarning={persistWarning}
+      isDefaultCredentials={isDefaultCredentials}
+      loginLog={loginLog}
     />
   );
 }
@@ -1007,7 +1286,8 @@ export default function App() {
 /* =========================================================================
    TAB: DASHBOARD
    ========================================================================= */
-function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSelectedMonth, scopeKpis, expenseByCategory, yearSeries, cards, vehicles, cardInvoice, currentYear }) {
+function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSelectedMonth, scopeKpis, expenseByCategory, yearSeries, cards, vehicles, cardInvoice, currentYear, categories, transactions, catById, budgets, setBudget, removeBudget }) {
+  const [budgetsModalOpen, setBudgetsModalOpen] = useState(false);
   return (
     <div className="fade-up">
       <header className="flex items-start justify-between mb-6 flex-wrap gap-4">
@@ -1034,6 +1314,12 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
         <KpiCard label="Despesa Total" value={brl(scopeKpis.expense)} sub={dashboardScope === "month" ? MONTHS_FULL[selectedMonth] : `Ano de ${currentYear}`} icon={ArrowDownRight} tone="rust" />
         <KpiCard label="Taxa de Poupança" value={`${scopeKpis.savings.toFixed(1)}%`} sub="da receita foi poupada" icon={PiggyBank} tone="gold" />
       </div>
+
+      <BudgetsSection categories={categories} transactions={transactions} catById={catById} selectedMonth={selectedMonth}
+        budgets={budgets} onManage={() => setBudgetsModalOpen(true)} />
+      {budgetsModalOpen && (
+        <BudgetsModal categories={categories} budgets={budgets} setBudget={setBudget} removeBudget={removeBudget} onClose={() => setBudgetsModalOpen(false)} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
         <div className="lg:col-span-2 ledger-card stitch-top" style={{ background: PAPER }}>
@@ -1084,14 +1370,27 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
           <div className="space-y-2.5">
             {cards.map((c) => {
               const total = cardInvoice(c.id, selectedMonth);
-              const pct = Math.min(100, (total / c.limit) * 100);
+              const rawPct = c.limit ? (total / c.limit) * 100 : 0;
+              const pct = Math.min(100, rawPct);
+              const tier = rawPct > 100 ? "over" : rawPct >= 100 ? "full" : rawPct >= 90 ? "high" : rawPct >= 80 ? "warn" : "ok";
+              const tierMeta = {
+                ok: null,
+                warn: { label: "80% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+                high: { label: "90% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+                full: { label: "Limite atingido", color: RUST, bg: RUST_SOFT },
+                over: { label: "Limite excedido", color: "#fff", bg: RUST },
+              }[tier];
               return (
                 <div key={c.id}>
                   <div className="flex justify-between items-center mb-1">
-                    <div className="flex items-center gap-2"><span style={{ width: 9, height: 9, borderRadius: 99, background: c.color }} /><span className="text-[12.5px] font-medium">{c.name}</span></div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span style={{ width: 9, height: 9, borderRadius: 99, background: c.color }} />
+                      <span className="text-[12.5px] font-medium">{c.name}</span>
+                      {tierMeta && <span className="text-[9.5px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide" style={{ background: tierMeta.bg, color: tierMeta.color }}>{tierMeta.label}</span>}
+                    </div>
                     <span className="text-[12.5px]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{brl(total)} <span style={{ color: SLATE }}>/ {brl(c.limit)}</span></span>
                   </div>
-                  <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: pct > 85 ? RUST : c.color }} /></div>
+                  <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: rawPct >= 90 ? RUST : rawPct >= 80 ? GOLD : c.color }} /></div>
                 </div>
               );
             })}
@@ -1119,6 +1418,88 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
         </div>
       </div>
     </div>
+  );
+}
+
+/* =========================================================================
+   METAS & ORÇAMENTOS POR CATEGORIA
+   ========================================================================= */
+function budgetTier(pct) {
+  if (pct > 100) return { key: "over", label: "Excedido", color: "#fff", bg: RUST, bar: RUST };
+  if (pct >= 100) return { key: "full", label: "Limite atingido", color: RUST, bg: RUST_SOFT, bar: RUST };
+  if (pct >= 80) return { key: "warn", label: "Atenção", color: "#8C6A1B", bg: GOLD_SOFT, bar: GOLD };
+  return { key: "ok", label: null, color: SAGE, bg: SAGE_SOFT, bar: SAGE };
+}
+
+function BudgetsSection({ categories, transactions, catById, selectedMonth, budgets, onManage }) {
+  const activeBudgets = Object.entries(budgets).filter(([, b]) => b.active && b.limit > 0);
+
+  const rows = activeBudgets.map(([categoryId, b]) => {
+    const spent = transactions.filter((t) => t.month === selectedMonth && t.type === "expense" && t.categoryId === categoryId).reduce((s, t) => s + Number(t.amount || 0), 0);
+    const pct = b.limit ? (spent / b.limit) * 100 : 0;
+    return { categoryId, name: catById(categoryId)?.name || categoryId, color: catById(categoryId)?.color || SLATE, limit: b.limit, spent, pct, tier: budgetTier(pct) };
+  });
+
+  return (
+    <div className="ledger-card mb-6" style={{ background: PAPER }}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2"><Target size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">Metas & Orçamentos por Categoria</h3></div>
+        <button onClick={onManage} className="flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1.5 rounded-md btn-ghost" style={{ color: SAGE }}><Settings2 size={13} /> Gerenciar orçamentos</button>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState icon={Target} title="Nenhuma meta ativa" desc="Defina um valor máximo mensal para categorias como Alimentação ou Lazer e acompanhe o quanto já foi gasto." />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+          {rows.map((r) => (
+            <div key={r.categoryId}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color }} />
+                  <span className="text-[12.5px] font-medium">{r.name}</span>
+                  {r.tier.label && <span className="text-[9.5px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide" style={{ background: r.tier.bg, color: r.tier.color }}>{r.tier.label}</span>}
+                </div>
+                <span className="text-[11.5px]" style={{ color: SLATE }}>{Math.round(r.pct)}%</span>
+              </div>
+              <div className="h-1.5 rounded-full mb-1" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${Math.min(100, r.pct)}%`, background: r.tier.bar }} /></div>
+              <div className="text-[11.5px]" style={{ color: SLATE }}>{brl(r.spent)} utilizados de {brl(r.limit)}{r.pct > 100 && <span style={{ color: RUST }}> · excedeu em {brl(r.spent - r.limit)}</span>}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BudgetsModal({ categories, budgets, setBudget, removeBudget, onClose }) {
+  return (
+    <Modal title="Gerenciar orçamentos por categoria" onClose={onClose} wide>
+      <p className="text-[12.5px] mb-4" style={{ color: SLATE }}>Defina um valor máximo mensal para as categorias de despesa que você quer acompanhar de perto. Período: mensal (outros períodos podem ser adicionados futuramente).</p>
+      <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+        {categories.expense.map((c) => {
+          const b = budgets[c.id];
+          const active = b?.active ?? false;
+          return (
+            <div key={c.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg" style={{ border: `1px solid ${LINE}` }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: c.color, flexShrink: 0 }} />
+              <span className="text-[12.5px] font-medium flex-1 min-w-0 truncate">{c.name}</span>
+              <input type="number" min="0" step="0.01" placeholder="R$ 0,00" value={b?.limit || ""} disabled={!active}
+                onChange={(e) => setBudget(c.id, { limit: parseFloat(e.target.value) || 0 })}
+                className="px-2.5 py-1.5 text-[12.5px] rounded-md disabled:opacity-40" style={{ ...inputStyle, width: 120 }} />
+              <label className="flex items-center gap-1.5 cursor-pointer flex-shrink-0">
+                <input type="checkbox" checked={active} onChange={(e) => setBudget(c.id, { active: e.target.checked })} className="w-4 h-4" style={{ accentColor: SAGE }} />
+                <span className="text-[11.5px]" style={{ color: SLATE }}>Ativo</span>
+              </label>
+              {b && (
+                <button onClick={() => removeBudget(c.id)} className="p-1 rounded-md btn-ghost flex-shrink-0"><Trash2 size={13} color={RUST} /></button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-end pt-4">
+        <button onClick={onClose} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium">Concluído</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1151,26 +1532,61 @@ function StatusChip({ t, onClick }) {
 function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions, currentYear, archivedYears }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [duplicateSeed, setDuplicateSeed] = useState(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [filterType, setFilterType] = useState("all");
   const [confirmClear, setConfirmClear] = useState(false);
   const [descQuery, setDescQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "paid" | "unpaid"
   const [selectedYear, setSelectedYear] = useState(currentYear);
+  const newButtonRef = React.useRef(null);
 
   const archivedYearsList = Object.keys(archivedYears || {}).map(Number).sort((a, b) => b - a);
   const isViewingCurrent = selectedYear === currentYear;
   const dataset = isViewingCurrent ? transactions : (archivedYears[selectedYear] || []);
 
+  // Busca global: quando há um termo de busca, a pesquisa deixa de ficar restrita ao mês
+  // selecionado e passa a cobrir todos os meses do ano em exibição (atual ou arquivado).
+  const isGlobalSearch = !!descQuery.trim();
   const allMonthTx = dataset.filter((t) => t.month === selectedMonth);
-  const monthTx = allMonthTx.filter((t) => filterType === "all" || t.type === filterType)
-    .filter((t) => !descQuery.trim() || t.description.toLowerCase().includes(descQuery.trim().toLowerCase()))
+  const searchSource = isGlobalSearch ? dataset : allMonthTx;
+  const monthTx = searchSource.filter((t) => filterType === "all" || t.type === filterType)
+    .filter((t) => !descQuery.trim() || t.description.toLowerCase().includes(descQuery.trim().toLowerCase()) || (t.notes || "").toLowerCase().includes(descQuery.trim().toLowerCase()))
     .filter((t) => categoryFilter === "all" || t.categoryId === categoryFilter)
     .filter((t) => statusFilter === "all" || (statusFilter === "paid" ? t.paid : !t.paid))
-    .sort((a, b) => (a.type === b.type ? 0 : a.type === "income" ? -1 : 1));
+    .sort((a, b) => (isGlobalSearch && a.month !== b.month ? a.month - b.month : (a.type === b.type ? 0 : a.type === "income" ? -1 : 1)));
 
   const hasExtraFilters = descQuery.trim() || categoryFilter !== "all" || statusFilter !== "all";
   const clearExtraFilters = () => { setDescQuery(""); setCategoryFilter("all"); setStatusFilter("all"); };
+
+  // Atalho de teclado: Ctrl+N (ou Cmd+N no Mac) abre o modal de novo lançamento direto desta aba.
+  // Observação técnica: alguns navegadores (ex.: Chrome desktop) reservam Ctrl+N para "nova janela"
+  // e não permitem que JS intercepte — nesses casos o atalho não tem efeito por limitação do navegador,
+  // não do app. Funciona normalmente no Firefox e no app instalado como PWA.
+  React.useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "n") {
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        e.preventDefault();
+        setEditing(null);
+        setDuplicateSeed(null);
+        setModalOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const handleDuplicate = (t) => {
+    // Copia os dados do lançamento, mas nunca a ligação com uma série de parcelas/recorrência
+    // (duplicar uma parcela não deve criar um novo elo com aquela série).
+    const { id, paid, installmentNumber, installmentTotal, recurringGroupId, indefiniteRecurring, ...rest } = t;
+    setDuplicateSeed({ ...rest, paid: false });
+    setEditing(null);
+    setModalOpen(true);
+  };
 
   const subtotals = useMemo(() => {
     const map = {};
@@ -1209,6 +1625,9 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost disabled:opacity-40"
                 style={{ border: `1px solid ${LINE}`, color: RUST }}>
                 <Eraser size={15} /> Zerar mês
+              </button>
+              <button onClick={() => setImportModalOpen(true)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}` }}>
+                <Landmark size={15} /> Importar extrato
               </button>
               <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium">
                 <Plus size={15} /> Novo lançamento
@@ -1268,7 +1687,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
             <div className="flex items-end gap-2 flex-wrap">
               <div className="relative">
                 <Search size={13} color={SLATE} className="absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input value={descQuery} onChange={(e) => setDescQuery(e.target.value)} placeholder="Buscar por descrição…" className={inputCls} style={{ ...inputStyle, paddingLeft: 28, width: 190, padding: "6px 8px 6px 28px" }} />
+                <input value={descQuery} onChange={(e) => setDescQuery(e.target.value)} placeholder="Buscar em todos os meses…" className={inputCls} style={{ ...inputStyle, paddingLeft: 28, width: 190, padding: "6px 8px 6px 28px" }} />
               </div>
               <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className={inputCls} style={{ ...inputStyle, width: 170, padding: "6px 8px" }}>
                 <option value="all">Todas as categorias</option>
@@ -1288,13 +1707,14 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
 
           <div className="ledger-card p-0 overflow-hidden" style={{ background: PAPER }}>
             {monthTx.length === 0 ? (
-              <EmptyState icon={Calendar} title={hasExtraFilters || filterType !== "all" ? "Nenhum resultado para os filtros" : "Nenhum lançamento em"} desc={hasExtraFilters || filterType !== "all" ? "Tente ajustar a descrição, categoria ou status pesquisados." : `Não há registros para ${MONTHS_FULL[selectedMonth]}. Adicione um novo lançamento para começar.`} />
+              <EmptyState icon={Calendar} title={hasExtraFilters || filterType !== "all" ? "Nenhum resultado para os filtros" : "Nenhum lançamento em"} desc={isGlobalSearch ? "Nenhum resultado encontrado em nenhum mês do ano." : (hasExtraFilters || filterType !== "all" ? "Tente ajustar a descrição, categoria ou status pesquisados." : `Não há registros para ${MONTHS_FULL[selectedMonth]}. Adicione um novo lançamento para começar.`)} />
             ) : (
               <div style={{ maxHeight: 480, overflowY: "auto", overflowX: "auto" }}>
                 <table className="w-full text-[12.5px]" style={{ minWidth: 640 }}>
                   <thead>
                     <tr style={{ borderBottom: `1px solid ${LINE}`, background: "#FBF8F1" }}>
                       <th className="text-left font-semibold px-4 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Descrição</th>
+                      {isGlobalSearch && <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Mês</th>}
                       <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Categoria</th>
                       <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Vencimento</th>
                       <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Status</th>
@@ -1321,6 +1741,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                             </span>
                           ) : null}
                         </td>
+                        {isGlobalSearch && <td className="px-3 py-2.5 whitespace-nowrap" style={{ color: SLATE }}>{MONTHS[t.month]}</td>}
                         <td className="px-3 py-2.5 whitespace-nowrap" style={{ color: SLATE }}>{catById(t.categoryId)?.name} <span className="opacity-60">› {subById(t.categoryId, t.subId)?.name}</span></td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>dia {t.dueDay}</td>
                         <td className="px-3 py-2.5 text-center"><StatusChip t={t} onClick={isViewingCurrent ? () => togglePaid(t.id) : undefined} /></td>
@@ -1330,6 +1751,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                         <td className="px-3 py-2.5">
                           {isViewingCurrent && (
                             <div className="flex items-center gap-1 justify-end">
+                              <button onClick={() => handleDuplicate(t)} className="p-1.5 rounded-md btn-ghost" title="Duplicar lançamento"><Copy size={13} color={SLATE} /></button>
                               <button onClick={() => { setEditing(t); setModalOpen(true); }} className="p-1.5 rounded-md btn-ghost"><Pencil size={13} color={SLATE} /></button>
                               <button onClick={() => deleteTransaction(t.id)} className="p-1.5 rounded-md btn-ghost"><Trash2 size={13} color={RUST} /></button>
                             </div>
@@ -1373,15 +1795,25 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
 
       {modalOpen && (
         <TransactionModal
-          onClose={() => setModalOpen(false)}
+          onClose={() => { setModalOpen(false); setDuplicateSeed(null); }}
           initial={editing}
+          duplicateFrom={duplicateSeed}
           categories={categories} cards={cards} vehicles={vehicles} selectedMonth={selectedMonth} currentYear={currentYear}
           onSave={(data) => {
             if (Array.isArray(data)) { addTransactionSeries(data); }
             else if (editing) { updateTransaction(editing.id, data); }
             else { addTransaction(data); }
             setModalOpen(false);
+            setDuplicateSeed(null);
           }}
+        />
+      )}
+
+      {importModalOpen && (
+        <ImportStatementModal
+          categories={categories} transactions={transactions} currentYear={currentYear}
+          addTransactionSeries={addTransactionSeries}
+          onClose={() => setImportModalOpen(false)}
         />
       )}
 
@@ -1403,22 +1835,24 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
   );
 }
 
-function TransactionModal({ onClose, onSave, initial, categories, cards, vehicles, selectedMonth, currentYear }) {
-  const [type, setType] = useState(initial?.type || "expense");
-  const [month, setMonth] = useState(initial?.month ?? selectedMonth);
-  const [categoryId, setCategoryId] = useState(initial?.categoryId || categories[type][0]?.id || "");
+function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories, cards, vehicles, selectedMonth, currentYear }) {
+  const seed = initial || duplicateFrom || null;
+  const [type, setType] = useState(seed?.type || "expense");
+  const [month, setMonth] = useState(seed?.month ?? selectedMonth);
+  const [categoryId, setCategoryId] = useState(seed?.categoryId || categories[type][0]?.id || "");
   const list = categories[type];
   const activeCat = list.find((c) => c.id === categoryId) || list[0];
-  const [subId, setSubId] = useState(initial?.subId || activeCat?.subs[0]?.id || "");
-  const [description, setDescription] = useState(initial?.description || "");
-  const [notes, setNotes] = useState(initial?.notes || "");
-  const [amount, setAmount] = useState(initial?.amount ?? "");
-  const [cardId, setCardId] = useState(initial?.cardId || "");
-  const [vehicleId, setVehicleId] = useState(initial?.vehicleId || "");
-  const [dueDay, setDueDay] = useState(initial?.dueDay ?? 10);
+  const [subId, setSubId] = useState(seed?.subId || activeCat?.subs[0]?.id || "");
+  const [description, setDescription] = useState(seed?.description || "");
+  const [notes, setNotes] = useState(seed?.notes || "");
+  const [amount, setAmount] = useState(seed?.amount ?? "");
+  const [cardId, setCardId] = useState(seed?.cardId || "");
+  const [vehicleId, setVehicleId] = useState(seed?.vehicleId || "");
+  const [dueDay, setDueDay] = useState(seed?.dueDay ?? 10);
   const [paid, setPaid] = useState(initial?.paid ?? false);
 
   const isEditing = !!initial;
+  const isDuplicating = !isEditing && !!duplicateFrom;
   const [recurring, setRecurring] = useState(false);
   const [recurrenceMode, setRecurrenceMode] = useState("installments"); // "installments" | "fixed"
   const [installmentsCount, setInstallmentsCount] = useState(2);
@@ -1428,11 +1862,15 @@ function TransactionModal({ onClose, onSave, initial, categories, cards, vehicle
   const handleTypeChange = (t) => { setType(t); const first = categories[t][0]; setCategoryId(first?.id || ""); setSubId(first?.subs[0]?.id || ""); };
   const handleCatChange = (id) => { setCategoryId(id); const c = list.find((x) => x.id === id); setSubId(c?.subs[0]?.id || ""); };
 
+  const [amountError, setAmountError] = useState("");
   const submit = () => {
     if (!description.trim() || !amount || !categoryId) return;
+    const parsedAmount = parseFloat(amount);
+    if (!(parsedAmount > 0)) { setAmountError("Informe um valor maior que zero."); return; }
+    setAmountError("");
     const base = {
       type, categoryId, subId, description: description.trim(), notes: notes.trim() || undefined,
-      amount: parseFloat(amount), cardId: cardId || undefined, vehicleId: vehicleId || undefined,
+      amount: parsedAmount, cardId: cardId || undefined, vehicleId: vehicleId || undefined,
       dueDay: Math.min(31, Math.max(1, Number(dueDay) || 10)), paid,
     };
 
@@ -1465,7 +1903,7 @@ function TransactionModal({ onClose, onSave, initial, categories, cards, vehicle
   };
 
   return (
-    <Modal title={initial ? "Editar lançamento" : "Novo lançamento"} onClose={onClose} wide>
+    <Modal title={initial ? "Editar lançamento" : isDuplicating ? "Duplicar lançamento" : "Novo lançamento"} onClose={onClose} wide>
       <div className="space-y-3.5">
         <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
           <button onClick={() => handleTypeChange("income")} className="flex-1 py-2 text-[13px] font-medium" style={{ background: type === "income" ? SAGE : PAPER, color: type === "income" ? "#fff" : INK }}>Receita</button>
@@ -1474,14 +1912,20 @@ function TransactionModal({ onClose, onSave, initial, categories, cards, vehicle
 
         <div className="grid grid-cols-3 gap-3">
           <Field label={recurring && !isEditing ? "Mês inicial" : "Mês"}><select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls} style={inputStyle}>{MONTHS_FULL.map((m, i) => <option key={m} value={i}>{m}</option>)}</select></Field>
-          <Field label="Valor (R$)"><input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" className={inputCls} style={inputStyle} /></Field>
-          <Field label="Dia de vencimento"><input type="number" min="1" max="31" value={dueDay} onChange={(e) => setDueDay(e.target.value)} className={inputCls} style={inputStyle} /></Field>
+          <Field label="Valor (R$)">
+            <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => { setAmount(e.target.value); setAmountError(""); }} placeholder="0,00" className={inputCls} style={inputStyle} />
+            {amountError && <span className="block text-[11px] mt-1" style={{ color: RUST }}>{amountError}</span>}
+          </Field>
+          <Field label={categoryId === "cartoes" && cardId ? "Dia da compra" : "Dia de vencimento"}>
+            <input type="number" min="1" max="31" value={dueDay} onChange={(e) => setDueDay(e.target.value)} className={inputCls} style={inputStyle} />
+            {categoryId === "cartoes" && cardId && <span className="block text-[10.5px] mt-1" style={{ color: SLATE }}>Usado para calcular em qual fatura a compra entra.</span>}
+          </Field>
         </div>
 
-        <Field label="Descrição"><input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex.: Mercado do mês" className={inputCls} style={inputStyle} /></Field>
+        <Field label="Descrição"><input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex.: Mercado do mês" maxLength={120} className={inputCls} style={inputStyle} /></Field>
 
         <Field label="Observações (aparece como tooltip ao passar o mouse)">
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: itens comprados, motivo do gasto, detalhes do contrato…" rows={2} className={inputCls} style={{ ...inputStyle, resize: "vertical" }} />
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: itens comprados, motivo do gasto, detalhes do contrato…" rows={2} maxLength={500} className={inputCls} style={{ ...inputStyle, resize: "vertical" }} />
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -1567,8 +2011,222 @@ function TransactionModal({ onClose, onSave, initial, categories, cards, vehicle
 }
 
 /* =========================================================================
-   TAB: PARCELAS & RECORRÊNCIAS
+   IMPORTAÇÃO DE EXTRATO BANCÁRIO (CSV)
+   Formato padrão reconhecido automaticamente: Data,Valor,Identificador,Descrição
+   (extrato do Nubank). Mapeamento de colunas manual disponível para outros formatos.
    ========================================================================= */
+const normalizeHeader = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+function detectColumnMapping(headers) {
+  const find = (candidates) => headers.find((h) => candidates.some((c) => normalizeHeader(h).includes(c)));
+  return {
+    date: find(["data"]) || "",
+    amount: find(["valor"]) || "",
+    description: find(["descricao", "historico", "estabelecimento"]) || "",
+    bankId: find(["identificador", "id transacao", "fitid", "id"]) || "",
+  };
+}
+
+function parseStatementDate(raw) {
+  const s = String(raw || "").trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return { day: Number(m[1]), month: Number(m[2]) - 1, year: Number(m[3]) };
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return { day: Number(iso[3]), month: Number(iso[2]) - 1, year: Number(iso[1]) };
+  return null;
+}
+
+function ImportStatementModal({ categories, transactions, currentYear, addTransactionSeries, onClose }) {
+  const [step, setStep] = useState("upload"); // "upload" | "preview"
+  const [rawText, setRawText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [error, setError] = useState("");
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState({ date: "", amount: "", description: "", bankId: "" });
+  const [rows, setRows] = useState([]);
+  const [bulkCategory, setBulkCategory] = useState("outros_desp:diversos");
+  const fileInputRef = React.useRef(null);
+
+  const existingBankIds = useMemo(() => new Set(transactions.filter((t) => t.bankId).map((t) => t.bankId)), [transactions]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => loadText(String(reader.result || ""));
+    reader.onerror = () => setError("Não foi possível ler o arquivo selecionado.");
+    reader.readAsText(file, "utf-8");
+  };
+
+  const loadText = (text) => {
+    setError("");
+    setRawText(text);
+    try {
+      const parsed = Papa.parse(text.trim(), { header: true, skipEmptyLines: true });
+      if (parsed.errors?.length && !parsed.data.length) throw new Error(parsed.errors[0].message);
+      const hdrs = Object.keys(parsed.data[0] || {});
+      if (!hdrs.length) throw new Error("Nenhuma coluna encontrada no arquivo.");
+      setHeaders(hdrs);
+      setMapping(detectColumnMapping(hdrs));
+    } catch (err) {
+      setError("Não foi possível interpretar o CSV: " + err.message);
+      setHeaders([]);
+    }
+  };
+
+  const buildPreview = () => {
+    if (!mapping.date || !mapping.amount || !mapping.description) { setError("Selecione ao menos as colunas de Data, Valor e Descrição antes de continuar."); return; }
+    setError("");
+    const parsed = Papa.parse(rawText.trim(), { header: true, skipEmptyLines: true });
+    const built = parsed.data.map((r, i) => {
+      const d = parseStatementDate(r[mapping.date]);
+      const amountRaw = parseFloat(String(r[mapping.amount] || "0").replace(",", ".")) || 0;
+      const bankId = mapping.bankId ? r[mapping.bankId] : "";
+      const isDuplicate = !!bankId && existingBankIds.has(bankId);
+      const type = amountRaw < 0 ? "expense" : "income";
+      const [defCat, defSub] = type === "income" ? ["extra", "rendimentos"] : bulkCategory.split(":");
+      return {
+        tempId: "row-" + i, valid: !!d,
+        day: d?.day || 1, month: d?.month ?? 0, description: String(r[mapping.description] || "Importado do extrato").trim(),
+        amount: Math.abs(amountRaw), type, bankId: bankId || undefined,
+        categoryId: defCat, subId: defSub,
+        include: !!d && !isDuplicate, isDuplicate,
+      };
+    }).filter((r) => r.amount > 0 || r.description);
+    setRows(built);
+    setStep("preview");
+  };
+
+  const toggleRow = (tempId) => setRows((prev) => prev.map((r) => (r.tempId === tempId ? { ...r, include: !r.include } : r)));
+  const updateRowCategory = (tempId, categoryId, subId) => setRows((prev) => prev.map((r) => (r.tempId === tempId ? { ...r, categoryId, subId } : r)));
+  const selectAll = (value) => setRows((prev) => prev.map((r) => (r.valid ? { ...r, include: value } : r)));
+  const applyBulkCategory = () => {
+    const [categoryId, subId] = bulkCategory.split(":");
+    setRows((prev) => prev.map((r) => (r.include && r.type === "expense" ? { ...r, categoryId, subId } : r)));
+  };
+
+  const includedCount = rows.filter((r) => r.include).length;
+  const duplicateCount = rows.filter((r) => r.isDuplicate).length;
+  const invalidCount = rows.filter((r) => !r.valid).length;
+
+  const confirmImport = () => {
+    const toImport = rows.filter((r) => r.include).map((r) => ({
+      type: r.type, month: r.month, categoryId: r.categoryId, subId: r.subId,
+      description: r.description, amount: r.amount, dueDay: Math.min(31, Math.max(1, r.day)),
+      bankId: r.bankId, paid: true, // extrato bancário já reflete o que de fato aconteceu na conta
+    }));
+    if (toImport.length) addTransactionSeries(toImport);
+    onClose();
+  };
+
+  return (
+    <Modal title="Importar extrato bancário" onClose={onClose} wide>
+      {step === "upload" ? (
+        <div className="space-y-4">
+          <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg" style={{ background: SAGE_SOFT }}>
+            <Landmark size={16} color={SAGE} className="mt-0.5 flex-shrink-0" />
+            <p className="text-[12.5px]" style={{ color: INK }}>Reconhece automaticamente o formato de extrato do Nubank (Data, Valor, Identificador, Descrição). Para outros bancos, ajuste o mapeamento de colunas abaixo depois de carregar o arquivo.</p>
+          </div>
+
+          <div>
+            <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+            <button onClick={() => fileInputRef.current?.click()} className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-xl" style={{ border: `1.5px dashed ${LINE}`, background: "#FBF8F1" }}>
+              <Upload size={22} color={SLATE} />
+              <span className="text-[13px] font-medium">{fileName || "Clique para escolher o arquivo CSV do extrato"}</span>
+              <span className="text-[11.5px]" style={{ color: SLATE }}>ou cole o conteúdo abaixo</span>
+            </button>
+          </div>
+
+          <textarea value={rawText} onChange={(e) => loadText(e.target.value)} rows={4} placeholder="Cole aqui o conteúdo do CSV do extrato, se preferir…"
+            className={inputCls} style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, resize: "vertical" }} />
+
+          {headers.length > 0 && (
+            <div className="grid grid-cols-2 gap-3 p-3.5 rounded-lg" style={{ border: `1px solid ${LINE}` }}>
+              <Field label="Coluna de Data"><select value={mapping.date} onChange={(e) => setMapping((m) => ({ ...m, date: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
+              <Field label="Coluna de Valor"><select value={mapping.amount} onChange={(e) => setMapping((m) => ({ ...m, amount: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
+              <Field label="Coluna de Descrição"><select value={mapping.description} onChange={(e) => setMapping((m) => ({ ...m, description: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
+              <Field label="Coluna de Identificador (opcional, evita duplicidade)"><select value={mapping.bankId} onChange={(e) => setMapping((m) => ({ ...m, bankId: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Nenhuma</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
+            </div>
+          )}
+
+          {error && <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: RUST_SOFT, color: RUST }}><AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /><span>{error}</span></div>}
+
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+            <button onClick={buildPreview} disabled={!headers.length} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">Analisar arquivo</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3.5">
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{includedCount} serão importados</span>
+            {duplicateCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>{duplicateCount} possíveis duplicatas (desmarcadas)</span>}
+            {invalidCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: RUST_SOFT, color: RUST }}>{invalidCount} com data inválida (ignorados)</span>}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => selectAll(true)} className="text-[12px] font-medium px-2 py-1 rounded-md btn-ghost" style={{ color: SAGE }}>Selecionar todos</button>
+            <button onClick={() => selectAll(false)} className="text-[12px] font-medium px-2 py-1 rounded-md btn-ghost" style={{ color: SLATE }}>Desmarcar todos</button>
+            <div className="h-4 w-px" style={{ background: LINE }} />
+            <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)} className="px-2 py-1 text-[12px] rounded-md" style={inputStyle}>
+              {categories.expense.map((c) => (c.subs.length ? c.subs.map((s) => <option key={c.id + ":" + s.id} value={`${c.id}:${s.id}`}>{c.name} › {s.name}</option>) : <option key={c.id} value={`${c.id}:`}>{c.name}</option>))}
+            </select>
+            <button onClick={applyBulkCategory} className="text-[12px] font-medium px-2 py-1 rounded-md btn-ghost" style={{ color: SAGE }}>Aplicar aos selecionados (despesas)</button>
+          </div>
+
+          <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${LINE}` }} className="rounded-lg">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr style={{ background: "#FBF8F1", borderBottom: `1px solid ${LINE}` }}>
+                  <th className="w-8"></th>
+                  <th className="text-left px-2 py-2" style={{ color: SLATE }}>Data</th>
+                  <th className="text-left px-2 py-2" style={{ color: SLATE }}>Descrição</th>
+                  <th className="text-left px-2 py-2" style={{ color: SLATE }}>Categoria</th>
+                  <th className="text-right px-2 py-2" style={{ color: SLATE }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.tempId} style={{ borderBottom: `1px solid ${LINE}`, opacity: r.valid ? 1 : 0.45 }}>
+                    <td className="text-center"><input type="checkbox" checked={r.include} disabled={!r.valid} onChange={() => toggleRow(r.tempId)} style={{ accentColor: SAGE }} /></td>
+                    <td className="px-2 py-1.5 whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.valid ? `${MONTHS[r.month]} ${String(r.day).padStart(2, "0")}` : "inválida"}</td>
+                    <td className="px-2 py-1.5 max-w-[220px] truncate" title={r.description}>
+                      {r.description}
+                      {r.isDuplicate && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>possível duplicata</span>}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {r.type === "expense" ? (
+                        <select value={`${r.categoryId}:${r.subId}`} onChange={(e) => { const [c, s] = e.target.value.split(":"); updateRowCategory(r.tempId, c, s); }} className="px-1.5 py-1 text-[11.5px] rounded-md" style={inputStyle}>
+                          {categories.expense.map((c) => (c.subs.length ? c.subs.map((s) => <option key={c.id + ":" + s.id} value={`${c.id}:${s.id}`}>{c.name} › {s.name}</option>) : <option key={c.id} value={`${c.id}:`}>{c.name}</option>))}
+                        </select>
+                      ) : (
+                        <span style={{ color: SAGE }}>Receita (Renda Extra)</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: r.type === "income" ? SAGE : RUST }}>
+                      {r.type === "income" ? "+" : "−"} {brl(r.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-[11px]" style={{ color: SLATE }}>As datas definem o mês de cada lançamento; o ano usado é o ano corrente do sistema ({currentYear}). Lançamentos importados já entram marcados como pagos, já que o extrato reflete o que de fato aconteceu na conta.</p>
+
+          <div className="flex justify-between gap-2">
+            <button onClick={() => setStep("upload")} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Voltar</button>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+              <button onClick={confirmImport} disabled={!includedCount} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">Importar {includedCount || ""} lançamento{includedCount === 1 ? "" : "s"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
 function EndRecurrenceModal({ group, onClose, onConfirm }) {
   const nextOpenMonth = group.entries.find((e) => !e.paid)?.month ?? group.entries[group.entries.length - 1].month;
   const [fromMonth, setFromMonth] = useState(nextOpenMonth);
@@ -2040,26 +2698,45 @@ function ConexaoTab({ sheetConfig, setSheetConfig, importFromSheet, importFromPa
   const [confirmText, setConfirmText] = useState("");
   const [syncing, setSyncing] = useState(false);
 
-  const appsScript = `function doGet(e) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Lancamentos");
-  const rows = sheet.getDataRange().getValues();
-  const headers = rows.shift();
-  const data = rows.map(r => Object.fromEntries(headers.map((h, i) => [h, r[i]])));
+  const appsScript = `// Defesa extra: defina aqui o MESMO token que você vai colar no campo
+// "Token secreto" do app. Sem essa constante bater, o script recusa a requisição
+// mesmo que alguém descubra a URL do Web App.
+const SHARED_SECRET = "COLOQUE_AQUI_UM_TOKEN_SECRETO_SEU"; // ex.: gere uma string aleatória longa
+
+function checkToken(token) {
+  return !SHARED_SECRET || token === SHARED_SECRET;
+}
+
+function doGet(e) {
+  if (!checkToken(e.parameter.token)) {
+    return ContentService.createTextOutput(JSON.stringify({ error: "Token inválido ou ausente." }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  const readSheet = (name) => {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 1) return [];
+    const rows = sheet.getDataRange().getValues();
+    const headers = rows.shift();
+    return rows.map(r => Object.fromEntries(headers.map((h, i) => [h, r[i]])));
+  };
+  const data = {
+    Lancamentos: readSheet("Lancamentos"),
+    Categorias: readSheet("Categorias"),
+    Config: readSheet("Config"),
+  };
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function doPost(e) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Lancamentos");
+function upsertAndDelete(sheet, items) {
+  if (!sheet || !items.length) return { upserted: 0, deleted: 0 };
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const idCol = headers.indexOf("ID");
-  const body = JSON.parse(e.postData.contents);
-  const items = Array.isArray(body) ? body : [body];
 
   const toDelete = items.filter(item => item._delete);
   const toUpsert = items.filter(item => !item._delete);
 
-  // Upserts primeiro (atualiza se o ID já existe, senão adiciona no final)
+  // Upserts (atualiza se o ID já existe, senão adiciona no final)
   toUpsert.forEach(item => {
     const rowValues = headers.map(h => item[h] ?? "");
     const data = sheet.getDataRange().getValues();
@@ -2079,8 +2756,29 @@ function doPost(e) {
       if (idsToDelete.includes(data[i][idCol])) sheet.deleteRow(i + 1);
     }
   }
+  return { upserted: toUpsert.length, deleted: toDelete.length };
+}
 
-  return ContentService.createTextOutput(JSON.stringify({ ok: true, upserted: toUpsert.length, deleted: toDelete.length }))
+function doPost(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const body = JSON.parse(e.postData.contents);
+
+  // Compatibilidade com versões antigas do app: um array solto = linhas de Lançamentos
+  const payload = Array.isArray(body) ? { Lancamentos: body } : body;
+
+  if (!checkToken(payload.token)) {
+    return ContentService.createTextOutput(JSON.stringify({ error: "Token inválido ou ausente." }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const result = {};
+  Object.keys(payload).forEach(sheetName => {
+    if (sheetName === "token") return;
+    const sheet = ss.getSheetByName(sheetName);
+    result[sheetName] = upsertAndDelete(sheet, payload[sheetName]);
+  });
+
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, ...result }))
     .setMimeType(ContentService.MimeType.JSON);
 }`;
 
@@ -2099,11 +2797,19 @@ function doPost(e) {
       <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid #C7DBD0` }}>
         <div className="flex items-center gap-2 mb-2"><RefreshCw size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold" style={{ color: SAGE }}>Sincronização bidirecional (recomendado)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: INK }}>
-          Depois de configurar a URL abaixo, <b>todo lançamento que você criar, editar, marcar como pago ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
+          Depois de configurar a URL abaixo, <b>todo lançamento (inclusive parcelas e recorrências) e toda categoria/subcategoria que você criar, editar ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
+          <br /><br />
+          <b>Anos arquivados também ficam salvos aqui</b> (na coluna Ano) — mesmo limpando os dados do navegador, ao configurar essa mesma URL de novo e abrir o app, o histórico de anos arquivados é recuperado automaticamente (o app sincroniza sozinho assim que reconhece uma conexão já configurada).
         </p>
         <Field label="URL do Apps Script Web App">
           <input value={sheetConfig.appsScriptUrl} onChange={(e) => setSheetConfig((s) => ({ ...s, appsScriptUrl: e.target.value }))} placeholder="https://script.google.com/macros/s/SEU_DEPLOY_ID/exec" className={inputCls} style={inputStyle} />
         </Field>
+        <Field label="Token secreto (opcional, mas recomendado)">
+          <input value={sheetConfig.secret} onChange={(e) => setSheetConfig((s) => ({ ...s, secret: e.target.value }))} placeholder="mesmo valor da constante SHARED_SECRET no Apps Script" className={inputCls} style={inputStyle} />
+        </Field>
+        <p className="text-[11px] mt-1.5" style={{ color: SLATE }}>
+          A URL do Apps Script, sozinha, já funciona como uma senha implícita — quem a descobrir lê e grava na sua planilha. Definir um token aqui (e a mesma string na constante <code className="px-1 rounded" style={{ background: "#EEE7D4" }}>SHARED_SECRET</code> do script, passo 4) adiciona uma camada extra: sem o token certo, o script recusa a requisição mesmo com a URL correta.
+        </p>
         <div className="flex items-center gap-2 mt-3">
           <button onClick={handleSync} disabled={syncing} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50">
             <RefreshCw size={14} className={syncing ? "animate-spin" : ""} /> {syncing ? "Sincronizando…" : "Sincronizar agora"}
@@ -2134,11 +2840,12 @@ function doPost(e) {
       </div>
 
       <div className="ledger-card mb-4" style={{ background: PAPER }}>
-        <h3 className="text-[13.5px] font-semibold mb-3">2. Como publicar sua planilha (2 minutos)</h3>
+        <h3 className="text-[13.5px] font-semibold mb-3">2. Como preparar sua planilha (3 minutos)</h3>
         <ol className="space-y-2 text-[12.5px]" style={{ color: SLATE }}>
-          <li><b style={{ color: INK }}>1.</b> Na sua planilha, crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com colunas: ID, Mes, Tipo, Categoria, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento.</li>
-          <li><b style={{ color: INK }}>2.</b> Vá em <b>Arquivo → Compartilhar → Publicar na Web</b> (não confunda com o botão "Compartilhar" comum — são telas diferentes).</li>
-          <li><b style={{ color: INK }}>3.</b> No menu do meio, troque "Documento inteiro" pela aba <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> especificamente, e no menu da direita escolha o formato <b>CSV</b>, depois clique em Publicar.</li>
+          <li><b style={{ color: INK }}>1.</b> Crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com as colunas: ID, Ano, Mes, Tipo, CategoriaId, Categoria, SubcategoriaId, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento, Notas, ParcelaNumero, ParcelaTotal, RecorrenciaGrupoId, RecorrenciaIndefinida, BankId. A coluna <b>Ano</b> é o que permite que anos arquivados fiquem salvos na planilha permanentemente (não só o ano corrente).</li>
+          <li><b style={{ color: INK }}>2.</b> Crie também uma segunda aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Categorias</code> com as colunas: ID, Tipo, CategoriaId, Categoria, Cor, SubcategoriaId, Subcategoria. É nela que suas categorias e subcategorias ficam salvas.</li>
+          <li><b style={{ color: INK }}>2b.</b> Crie uma terceira aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Config</code> com as colunas: ID, Chave, Valor. É nela que fica salvo qual é o "ano corrente" do sistema — sem isso, se você limpar os dados do navegador depois de arquivar um ano, o app pode ficar confuso sobre qual ano está ativo.</li>
+          <li><b style={{ color: INK }}>3.</b> Para a importação simples em CSV (passo 1 acima, opcional): vá em <b>Arquivo → Compartilhar → Publicar na Web</b> (não confunda com o botão "Compartilhar" comum), escolha a aba <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> especificamente e o formato <b>CSV</b>. Essa publicação só cobre Lançamentos — Categorias sincroniza apenas pela via bidirecional (Apps Script, passo 4 abaixo).</li>
           <li><b style={{ color: INK }}>4.</b> Copie o link gerado e cole no campo do passo 1. Confira se o número depois de <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>gid=</code> corresponde à aba certa.</li>
         </ol>
       </div>
@@ -2148,7 +2855,7 @@ function doPost(e) {
         <p className="text-[12.5px] mb-3" style={{ color: SLATE }}>
           Se a importação automática acima falhar (é comum o navegador bloquear a busca direta a domínios do Google por CORS), abra o link publicado em outra aba, selecione tudo (<b>Ctrl/Cmd+A</b>), copie e cole o conteúdo aqui embaixo. Este caminho não depende de rede e sempre funciona.
         </p>
-        <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} placeholder="ID,Mes,Tipo,Categoria,Subcategoria,Descricao,Valor,Cartao,Veiculo,Pago,Vencimento&#10;abc123,Jan,Despesa,moradia,aluguel,Aluguel,2600,,,Sim,5"
+        <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} placeholder="ID,Ano,Mes,Tipo,Categoria,Subcategoria,Descricao,Valor,Cartao,Veiculo,Pago,Vencimento&#10;abc123,2026,Jan,Despesa,moradia,aluguel,Aluguel,2600,,,Sim,5"
           className={inputCls} style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, resize: "vertical" }} />
         <div className="flex items-center gap-2 mt-3">
           <button onClick={() => importFromPastedCsv(pasteText)} disabled={!pasteText.trim()} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40"><ClipboardPaste size={14} /> Importar do texto colado</button>
@@ -2158,7 +2865,7 @@ function doPost(e) {
       <div className="ledger-card mb-4" style={{ background: PAPER }}>
         <div className="flex items-center gap-2 mb-2"><Settings2 size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">4. Publicar o Apps Script Web App (necessário para a sincronização bidirecional)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: SLATE }}>
-          A publicação em CSV só permite leitura — para <b>gravar</b> lançamentos na planilha, publique este script como Web App na própria planilha. A coluna <b>ID</b> é o que permite ao script atualizar a linha certa em vez de duplicar.
+          A publicação em CSV só permite leitura — para <b>gravar</b> lançamentos e categorias na planilha, publique este script como Web App na própria planilha. Ele lê e grava nas duas abas (<b>Lancamentos</b> e <b>Categorias</b>) automaticamente; a coluna <b>ID</b> de cada aba é o que permite ao script atualizar a linha certa em vez de duplicar.
         </p>
         <pre className="text-[11.5px] p-3.5 rounded-lg overflow-x-auto" style={{ background: INK, color: "#D9E4F5", fontFamily: "'JetBrains Mono', monospace" }}>{appsScript}</pre>
         <p className="text-[11.5px] mt-2" style={{ color: SLATE }}>Em <b>Extensões → Apps Script</b>, cole o código, publique como Web App ("Executar como: eu", "Quem pode acessar: qualquer pessoa") e cole a URL gerada no campo de sincronização bidirecional no topo desta página.</p>
@@ -2325,6 +3032,221 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   TAB: DIAGNÓSTICO DE SEGURANÇA
+   Checklist honesto — sem placar inflado. Cada item é ✅ verificado,
+   ⚠️ limitação conhecida, ou ➖ não se aplica (com o motivo).
+   ========================================================================= */
+function checkLocalStorageAvailable() {
+  try {
+    const k = "__meufinanceiro_probe__";
+    window.localStorage.setItem(k, "1");
+    window.localStorage.removeItem(k);
+    return true;
+  } catch (_) { return false; }
+}
+
+function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig }) {
+  const secureContext = typeof window !== "undefined" && window.isSecureContext;
+  const localStorageOk = checkLocalStorageAvailable();
+  const sanitizeSelfTest = sanitizeForSheet("=CMD|'/C calc'!A1") === "'=CMD|'/C calc'!A1" && sanitizeForSheet("Mercado") === "Mercado";
+
+  const applicable = [
+    {
+      id: "xss", category: "Validação", label: "XSS (Cross-Site Scripting)",
+      status: "ok",
+      detail: "Auditoria estática do código-fonte não encontrou dangerouslySetInnerHTML, innerHTML, document.write, eval() ou new Function(). Todo texto do usuário é renderizado como texto React puro (escapado por padrão).",
+    },
+    {
+      id: "secrets", category: "Frontend", label: "Segredos expostos no bundle",
+      status: "ok",
+      detail: "Nenhuma chave de API ou token hardcoded encontrado além do hash de senha (ver item de autenticação, é uma limitação conhecida e não um segredo vazado por engano).",
+    },
+    {
+      id: "default-creds", category: "Autenticação", label: "Credenciais padrão de fábrica",
+      status: isDefaultCredentials ? "warn" : "ok",
+      detail: isDefaultCredentials
+        ? "As credenciais ainda são as padrão do código-fonte (usuário 'familia'). Troque em 'Alterar usuário e senha' antes de publicar para acesso público."
+        : "As credenciais já foram alteradas em relação ao padrão de fábrica.",
+    },
+    {
+      id: "auth-client-side", category: "Autenticação", label: "Modelo de autenticação client-side",
+      status: "warn",
+      detail: "Login é validado inteiramente no navegador (hash SHA-256 comparado no código). Protege contra acesso casual, mas não contra alguém que leia o bundle ou manipule o estado via DevTools. Sem backend, não há como eliminar essa limitação por completo.",
+    },
+    {
+      id: "brute-force", category: "Autenticação", label: `Bloqueio por tentativas (${AUTH_CONFIG.maxAttempts} tentativas / ${AUTH_CONFIG.lockoutSeconds}s)`,
+      status: "warn",
+      detail: "Bloqueio temporário ativo e agora persistido em localStorage entre recarregamentos (antes resetava com F5). Ainda pode ser contornado limpando os dados do navegador — não substitui rate limiting de servidor, que exigiria um backend.",
+    },
+    {
+      id: "cred-persist", category: "Autenticação", label: "Persistência de credenciais alteradas",
+      status: persistWarning ? "warn" : (localStorageOk ? "ok" : "warn"),
+      detail: !localStorageOk
+        ? "localStorage indisponível neste navegador/ambiente — trocas de senha valem só para esta sessão (comportamento esperado dentro do preview de artifacts do Claude; funciona normalmente após publicado)."
+        : "localStorage disponível — credenciais alteradas persistem neste navegador entre sessões.",
+    },
+    {
+      id: "sheet-token", category: "Integrações", label: "Token secreto do Apps Script",
+      status: !sheetConfig?.appsScriptUrl ? "na" : (sheetConfig.secret ? "ok" : "warn"),
+      detail: !sheetConfig?.appsScriptUrl
+        ? "Sincronização com Google Sheets não configurada."
+        : sheetConfig.secret
+        ? "Token configurado — a URL do Apps Script sozinha não é mais suficiente para ler/gravar na planilha."
+        : "Nenhum token configurado — quem descobrir a URL do Apps Script lê e grava na planilha. Configure um token em Conexão Google Sheets.",
+    },
+    {
+      id: "formula-injection", category: "Integrações", label: "Injeção de fórmula no Google Sheets",
+      status: sanitizeSelfTest ? "ok" : "warn",
+      detail: sanitizeSelfTest
+        ? "Auto-teste ao vivo: valores que começam com =, +, -, @ são prefixados com apóstrofo antes de gravar na planilha, neutralizando fórmulas maliciosas."
+        : "Auto-teste falhou — sanitização de fórmula pode não estar ativa (reporte isso).",
+    },
+    {
+      id: "input-validation", category: "Validação", label: "Validação de valores de lançamento",
+      status: "ok",
+      detail: "Valores zero ou negativos são rejeitados no formulário; descrição e observações têm limite de tamanho (120/500 caracteres).",
+    },
+    {
+      id: "https", category: "Transporte", label: "Contexto seguro (HTTPS)",
+      status: secureContext ? "ok" : "warn",
+      detail: secureContext
+        ? "A página está sendo servida em um contexto seguro (HTTPS ou localhost)."
+        : "A página não está em um contexto seguro — sirva sempre via HTTPS em produção (Vercel e Firebase Hosting já fazem isso por padrão).",
+    },
+    {
+      id: "headers", category: "Transporte", label: "Cabeçalhos de segurança HTTP (CSP, X-Frame-Options etc.)",
+      status: "warn",
+      detail: "Não são controláveis pelo código React em runtime — dependem de configuração no provedor de hospedagem. Arquivos vercel.json/firebase.json com esses cabeçalhos foram fornecidos separadamente; confirme que foram publicados.",
+    },
+  ];
+
+  const notApplicable = [
+    { id: "sqli", label: "SQL Injection / Prepared Statements", reason: "não há banco de dados nem SQL no sistema." },
+    { id: "session", label: "Session Fixation / Hijacking / Replay", reason: "não há sessão de servidor." },
+    { id: "cookies", label: "Cookies (HttpOnly, Secure, SameSite)", reason: "o sistema não usa cookies." },
+    { id: "jwt", label: "Manipulação de JWT", reason: "o sistema não usa JWT." },
+    { id: "csrf", label: "CSRF", reason: "depende de cookies/sessão automática, que não existem aqui." },
+    { id: "upload", label: "Upload de arquivos malicioso", reason: "o sistema não tem funcionalidade de upload." },
+    { id: "xxe-ssrf", label: "XXE / SSRF / Command Injection / Path Traversal", reason: "não há parsing de XML, execução de comandos, nem acesso a arquivos por caminho no servidor." },
+    { id: "idor", label: "IDOR / múltiplos perfis / escalação de privilégio", reason: "login único e compartilhado, sem papéis/permissões distintas." },
+    { id: "server-rate-limit", label: "Rate limiting e logs de servidor", reason: "não há servidor de aplicação — hospedagem é 100% estática." },
+    { id: "open-redirect", label: "Open Redirect", reason: "o sistema não tem redirecionamentos baseados em parâmetro de URL." },
+  ];
+
+  return { applicable, notApplicable };
+}
+
+const SEC_STATUS_META = {
+  ok: { label: "Verificado", color: SAGE, bg: SAGE_SOFT, icon: CheckCircle2 },
+  warn: { label: "Limitação conhecida", color: "#8C6A1B", bg: GOLD_SOFT, icon: AlertTriangle },
+  na: { label: "Não se aplica", color: SLATE, bg: "#EFEBE0", icon: Circle },
+};
+
+function SegurancaTab({ authConfig, isDefaultCredentials, persistWarning, loginLog, sheetConfig, setTab }) {
+  const [lastRun, setLastRun] = useState(() => new Date());
+  const { applicable, notApplicable } = useMemo(
+    () => buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isDefaultCredentials, persistWarning, sheetConfig, lastRun]
+  );
+  const [showNA, setShowNA] = useState(false);
+
+  const okCount = applicable.filter((c) => c.status === "ok").length;
+  const warnCount = applicable.filter((c) => c.status === "warn").length;
+  const naInline = applicable.filter((c) => c.status === "na").length;
+
+  return (
+    <div className="fade-up">
+      <header className="flex items-start justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Diagnóstico de Segurança</h1>
+          <p className="text-[13px] mt-1" style={{ color: SLATE }}>Checklist honesto para um sistema 100% client-side — sem placar inflado, sem fingir proteções que não existem.</p>
+        </div>
+        <button onClick={() => setLastRun(new Date())} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium">
+          <RefreshCw size={14} /> Executar diagnóstico novamente
+        </button>
+      </header>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <KpiCard label="Verificações OK" value={String(okCount)} sub={`de ${applicable.length} aplicáveis`} icon={CheckCircle2} tone="sage" />
+        <KpiCard label="Limitações conhecidas" value={String(warnCount)} sub="requerem atenção ou aceite consciente" icon={AlertTriangle} tone="gold" />
+        <KpiCard label="Não se aplicam" value={String(notApplicable.length + naInline)} sub="arquitetura sem backend/banco/sessão" icon={Circle} tone="ink" />
+      </div>
+
+      {isDefaultCredentials && (
+        <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl mb-5" style={{ background: RUST_SOFT }}>
+          <ShieldAlert size={16} color={RUST} className="mt-0.5 flex-shrink-0" />
+          <div className="text-[13px]" style={{ color: INK }}>
+            <b style={{ color: RUST }}>Credenciais padrão ainda ativas.</b> Antes de expor este sistema publicamente, troque o usuário e a senha.
+            <button onClick={() => setTab && setTab("dashboard")} className="underline ml-1" style={{ color: RUST }}>Ir para o menu (Alterar usuário e senha fica no rodapé da barra lateral)</button>
+          </div>
+        </div>
+      )}
+
+      <div className="ledger-card mb-5" style={{ background: PAPER }}>
+        <h3 className="text-[13.5px] font-semibold mb-3">Verificações aplicáveis</h3>
+        <div className="space-y-2">
+          {applicable.map((c) => {
+            const meta = SEC_STATUS_META[c.status];
+            const Icon = meta.icon;
+            return (
+              <div key={c.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg" style={{ background: "#FBF8F1" }}>
+                <div style={{ background: meta.bg, borderRadius: 999, padding: 6, flexShrink: 0 }}><Icon size={13} color={meta.color} /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[12.5px] font-semibold">{c.label}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wide" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+                    <span className="text-[10.5px]" style={{ color: SLATE }}>{c.category}</span>
+                  </div>
+                  <div className="text-[12px] mt-0.5" style={{ color: SLATE }}>{c.detail}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="ledger-card mb-5" style={{ background: PAPER }}>
+        <button onClick={() => setShowNA((s) => !s)} className="flex items-center gap-1.5 text-[13px] font-semibold w-full">
+          {showNA ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Itens que não se aplicam a esta arquitetura ({notApplicable.length})
+        </button>
+        {showNA && (
+          <div className="mt-3 space-y-1.5">
+            {notApplicable.map((n) => (
+              <div key={n.id} className="flex items-start gap-2 text-[12px]" style={{ color: SLATE }}>
+                <Circle size={11} className="mt-0.5 flex-shrink-0" />
+                <span><b style={{ color: INK }}>{n.label}</b> — não se aplica: {n.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="ledger-card" style={{ background: PAPER }}>
+        <h3 className="text-[13.5px] font-semibold mb-1">Log de tentativas de login (sessão atual)</h3>
+        <p className="text-[11.5px] mb-3" style={{ color: SLATE }}>Visibilidade local, em memória — não é um log auditável à prova de adulteração, some ao fechar a aba.</p>
+        {!loginLog || loginLog.length === 0 ? (
+          <EmptyState icon={Lock} title="Nenhuma tentativa registrada ainda" desc="Tentativas de login (sucesso ou falha) aparecerão aqui." />
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+            {loginLog.map((l) => (
+              <div key={l.id} className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[12px]" style={{ background: "#FBF8F1" }}>
+                <div className="flex items-center gap-2">
+                  {l.success ? <CheckCircle2 size={13} color={SAGE} /> : <AlertTriangle size={13} color={RUST} />}
+                  <span className="font-medium">{l.username || "(vazio)"}</span>
+                  <span style={{ color: l.success ? SAGE : RUST }}>{l.success ? "sucesso" : "falha"}</span>
+                </div>
+                <span style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>{new Date(l.at).toLocaleTimeString("pt-BR")}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

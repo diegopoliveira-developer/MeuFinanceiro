@@ -81,5 +81,11 @@ Se preferir trocar a credencial padrão diretamente no código (sem depender do 
 
 ## Sincronização com Google Sheets
 
-Depois de configurar a URL do Apps Script Web App na aba "Conexão Google Sheets", todo lançamento criado, editado, marcado como pago ou excluído é enviado automaticamente para a planilha (upsert por ID). O botão "Sincronizar agora" serve para trazer o que já estava na planilha e alinhar os dois lados na primeira vez.
+Depois de configurar a URL do Apps Script Web App na aba "Conexão Google Sheets", todo lançamento (inclusive parcelas/recorrências), categoria e subcategoria criada, editada ou excluída é enviada automaticamente para a planilha (upsert por ID). O botão "Sincronizar agora" serve para trazer o que já estava na planilha e alinhar os dois lados na primeira vez.
+
+A planilha precisa de três abas: `Lancamentos`, `Categorias` e `Config` (esta última guarda só o "ano corrente" do sistema — veja o passo a passo dentro do app, aba Conexão). A aba `Config` é o que permite recuperar tanto os anos arquivados quanto qual ano está ativo mesmo depois de limpar os dados do navegador por completo — sem ela, uma sessão nova sempre volta a assumir que o ano corrente é o padrão de fábrica.
+
+## Importação de extrato bancário
+
+Na aba Lançamentos, o botão "Importar extrato" abre um assistente que lê um CSV do seu banco (reconhece automaticamente o formato do Nubank — colunas Data, Valor, Identificador, Descrição), mostra uma prévia editável antes de confirmar, detecta duplicatas (por Identificador, se a coluna existir) e permite mapear colunas manualmente para outros formatos de banco.
 
