@@ -10,7 +10,7 @@ import {
   AlertCircle, ChevronDown, ChevronRight, Download, Upload, PiggyBank,
   ArrowUpRight, ArrowDownRight, BookOpen, CheckCircle2, Circle, Clock,
   AlertTriangle, Eraser, Info, Repeat, ListOrdered, Infinity as InfinityIcon, Ban, Layers, Search, ClipboardPaste,
-  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert, Target, Copy, Landmark
+  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert, Target, Copy, Landmark, Menu
 } from "lucide-react";
 
 /* =========================================================================
@@ -314,12 +314,12 @@ const inputStyle = { background: PAPER, border: `1px solid ${LINE}`, color: INK,
 function Modal({ title, onClose, children, wide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(16,27,45,0.55)", backdropFilter: "blur(2px)" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="w-full rounded-xl overflow-hidden" style={{ maxWidth: wide ? 640 : 440, background: PARCHMENT, border: `1px solid ${LINE}`, boxShadow: "0 24px 60px rgba(16,27,45,0.35)" }}>
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${LINE}` }}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full rounded-xl overflow-hidden flex flex-col" style={{ maxWidth: wide ? 640 : 440, maxHeight: "90vh", background: PARCHMENT, border: `1px solid ${LINE}`, boxShadow: "0 24px 60px rgba(16,27,45,0.35)" }}>
+        <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ borderBottom: `1px solid ${LINE}` }}>
           <h3 className="text-[15px] font-semibold" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{title}</h3>
           <button onClick={onClose} className="p-1 rounded-md hover:bg-black/5"><X size={17} color={SLATE} /></button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-5 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
@@ -341,6 +341,7 @@ function EmptyState({ icon: Icon, title, desc }) {
 function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning, isDefaultCredentials, loginLog }) {
   const [tab, setTab] = useState("dashboard");
   const [credentialsModalOpen, setCredentialsModalOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [categories, setCategories] = useState(seedCategories);
   const [cards, setCards] = useState(seedCards);
   const [vehicles, setVehicles] = useState(seedVehicles);
@@ -381,8 +382,17 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   // Metas e orçamentos por categoria: { [categoryId]: { limit, active, period } }
   // "period" já existe na estrutura pensando em periodicidades futuras (hoje só "monthly" é usado).
   const [budgets, setBudgets] = useState({});
-  const setBudget = (categoryId, patch) => setBudgets((prev) => ({ ...prev, [categoryId]: { limit: 0, active: true, period: "monthly", ...prev[categoryId], ...patch } }));
-  const removeBudget = (categoryId) => setBudgets((prev) => { const next = { ...prev }; delete next[categoryId]; return next; });
+  const setBudget = (categoryId, patch) => {
+    setBudgets((prev) => {
+      const next = { ...prev, [categoryId]: { limit: 0, active: true, period: "monthly", ...prev[categoryId], ...patch } };
+      pushToSheet({ Orcamentos: [toBudgetRow(categoryId, next[categoryId])] });
+      return next;
+    });
+  };
+  const removeBudget = (categoryId) => {
+    setBudgets((prev) => { const next = { ...prev }; delete next[categoryId]; return next; });
+    deleteFromSheet("Orcamentos", [categoryId]);
+  };
 
   const allCategories = useMemo(() => [...categories.income, ...categories.expense], [categories]);
   const catById = useCallback((id) => allCategories.find((c) => c.id === id), [allCategories]);
@@ -525,13 +535,45 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   };
 
   /* ---------- CRUD: cards & vehicles ---------- */
-  const addCard = (card) => setCards((prev) => [...prev, { id: uid(), ...card }]);
-  const updateCard = (id, patch) => setCards((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const deleteCard = (id) => setCards((prev) => prev.filter((c) => c.id !== id));
+  const toCardRow = (c) => ({ ID: c.id, Nome: sanitizeForSheet(c.name), Limite: c.limit, DiaFechamento: c.closingDay, DiaVencimento: c.dueDay, Cor: c.color });
+  const toVehicleRow = (v) => ({ ID: v.id, Nome: sanitizeForSheet(v.name), ValorTotal: v.totalValue, TotalParcelas: v.totalInstallments, ValorParcela: v.installmentValue, ParcelasPagas: v.paidInstallments, MesInicio: v.startMonth ?? 0 });
+  const toBudgetRow = (categoryId, b) => ({ ID: categoryId, CategoriaId: categoryId, Limite: b.limit, Ativo: b.active ? "Sim" : "Não", Periodo: b.period || "monthly" });
 
-  const addVehicle = (v) => setVehicles((prev) => [...prev, { id: uid(), ...v }]);
-  const updateVehicle = (id, patch) => setVehicles((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
-  const deleteVehicle = (id) => setVehicles((prev) => prev.filter((v) => v.id !== id));
+  const addCard = (card) => {
+    const full = { id: uid(), ...card };
+    setCards((prev) => [...prev, full]);
+    pushToSheet({ Cartoes: [toCardRow(full)] });
+  };
+  const updateCard = (id, patch) => {
+    setCards((prev) => {
+      const next = prev.map((c) => (c.id === id ? { ...c, ...patch } : c));
+      const updated = next.find((c) => c.id === id);
+      if (updated) pushToSheet({ Cartoes: [toCardRow(updated)] });
+      return next;
+    });
+  };
+  const deleteCard = (id) => {
+    setCards((prev) => prev.filter((c) => c.id !== id));
+    deleteFromSheet("Cartoes", [id]);
+  };
+
+  const addVehicle = (v) => {
+    const full = { id: uid(), ...v };
+    setVehicles((prev) => [...prev, full]);
+    pushToSheet({ Veiculos: [toVehicleRow(full)] });
+  };
+  const updateVehicle = (id, patch) => {
+    setVehicles((prev) => {
+      const next = prev.map((v) => (v.id === id ? { ...v, ...patch } : v));
+      const updated = next.find((v) => v.id === id);
+      if (updated) pushToSheet({ Veiculos: [toVehicleRow(updated)] });
+      return next;
+    });
+  };
+  const deleteVehicle = (id) => {
+    setVehicles((prev) => prev.filter((v) => v.id !== id));
+    deleteFromSheet("Veiculos", [id]);
+  };
 
   /* ---------- Computations ---------- */
   const monthTotals = useCallback((m) => {
@@ -735,6 +777,9 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       const remoteLancamentos = Array.isArray(remoteData) ? remoteData : (remoteData.Lancamentos || []);
       const remoteCategorias = Array.isArray(remoteData) ? [] : (remoteData.Categorias || []);
       const remoteConfig = Array.isArray(remoteData) ? [] : (remoteData.Config || []);
+      const remoteCartoes = Array.isArray(remoteData) ? [] : (remoteData.Cartoes || []);
+      const remoteVeiculos = Array.isArray(remoteData) ? [] : (remoteData.Veiculos || []);
+      const remoteOrcamentos = Array.isArray(remoteData) ? [] : (remoteData.Orcamentos || []);
 
       // O ano corrente também é recuperado da planilha (aba "Config") — importante para quando
       // o navegador foi limpo por completo e o app "esqueceria" que já tinha avançado de ano.
@@ -850,7 +895,55 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         return mergedRows.length ? unflattenCategoryRows(mergedRows) : prevCats;
       });
 
-      setSheetConfig((s) => ({ ...s, status: "success", message: `Sincronização concluída — ${remoteTx.length} lançamentos e ${remoteCategorias.length} linhas de categorias vieram da planilha; o que só existia aqui foi enviado para lá.`, lastSync: new Date().toISOString() }));
+      // 4) Mescla cartões de crédito
+      setCards((prevCards) => {
+        const remoteById = new Map(remoteCartoes.filter((r) => r.ID).map((r) => [r.ID, r]));
+        const allIds = new Set([...prevCards.map((c) => c.id), ...remoteById.keys()]);
+        const merged = [];
+        allIds.forEach((id) => {
+          const loc = prevCards.find((c) => c.id === id);
+          const rem = remoteById.get(id);
+          if (rem) merged.push({ id, name: rem.Nome || loc?.name || "Cartão", limit: Number(rem.Limite) || loc?.limit || 0, closingDay: Number(rem.DiaFechamento) || loc?.closingDay || 5, dueDay: Number(rem.DiaVencimento) || loc?.dueDay || 10, color: rem.Cor || loc?.color || SAGE });
+          else if (loc) merged.push(loc);
+        });
+        const toPush = prevCards.filter((c) => !remoteById.has(c.id));
+        if (toPush.length) pushToSheet({ Cartoes: toPush.map(toCardRow) });
+        return merged;
+      });
+
+      // 5) Mescla veículos/financiamentos
+      setVehicles((prevVehicles) => {
+        const remoteById = new Map(remoteVeiculos.filter((r) => r.ID).map((r) => [r.ID, r]));
+        const allIds = new Set([...prevVehicles.map((v) => v.id), ...remoteById.keys()]);
+        const merged = [];
+        allIds.forEach((id) => {
+          const loc = prevVehicles.find((v) => v.id === id);
+          const rem = remoteById.get(id);
+          if (rem) merged.push({ id, name: rem.Nome || loc?.name || "Veículo", totalValue: Number(rem.ValorTotal) || loc?.totalValue || 0, totalInstallments: Number(rem.TotalParcelas) || loc?.totalInstallments || 1, installmentValue: Number(rem.ValorParcela) || loc?.installmentValue || 0, paidInstallments: Number(rem.ParcelasPagas) || loc?.paidInstallments || 0, startMonth: Number(rem.MesInicio) || loc?.startMonth || 0 });
+          else if (loc) merged.push(loc);
+        });
+        const toPush = prevVehicles.filter((v) => !remoteById.has(v.id));
+        if (toPush.length) pushToSheet({ Veiculos: toPush.map(toVehicleRow) });
+        return merged;
+      });
+
+      // 6) Mescla metas e orçamentos por categoria
+      setBudgets((prevBudgets) => {
+        const localIds = Object.keys(prevBudgets);
+        const remoteById = new Map(remoteOrcamentos.filter((r) => r.ID).map((r) => [r.ID, r]));
+        const allIds = new Set([...localIds, ...remoteById.keys()]);
+        const merged = {};
+        allIds.forEach((categoryId) => {
+          const loc = prevBudgets[categoryId];
+          const rem = remoteById.get(categoryId);
+          merged[categoryId] = rem ? { limit: Number(rem.Limite) || 0, active: String(rem.Ativo || "").toLowerCase().startsWith("s"), period: rem.Periodo || "monthly" } : loc;
+        });
+        const toPush = localIds.filter((id) => !remoteById.has(id));
+        if (toPush.length) pushToSheet({ Orcamentos: toPush.map((id) => toBudgetRow(id, prevBudgets[id])) });
+        return merged;
+      });
+
+      setSheetConfig((s) => ({ ...s, status: "success", message: `Sincronização concluída — lançamentos, categorias, cartões, veículos e orçamentos foram alinhados com a planilha.`, lastSync: new Date().toISOString() }));
     } catch (err) {
       const isNetworkError = err instanceof TypeError;
       setSheetConfig((s) => ({ ...s, status: "error", message: (isNetworkError ? "Não foi possível conectar ao Apps Script — verifique a URL e se o deploy está com acesso 'Qualquer pessoa'." : "Falha ao sincronizar: " + err.message) }));
@@ -892,26 +985,35 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       `}</style>
 
       <div className="flex">
+        {/* Fundo escurecido atrás da gaveta de navegação, só em mobile/tablet */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden" style={{ background: "rgba(16,27,45,0.55)" }} onClick={() => setSidebarOpen(false)} />
+        )}
+
         {/* ============ SIDEBAR — ledger index tabs ============ */}
-        <aside style={{ width: 236, background: INK, height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", paddingTop: 22, display: "flex", flexDirection: "column" }}>
+        <aside
+          className={`fixed lg:sticky top-0 left-0 z-50 h-screen transition-transform duration-200 ease-out ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
+          style={{ width: 236, background: INK, alignSelf: "flex-start", paddingTop: 18, display: "flex", flexDirection: "column" }}
+        >
           <div className="px-5 pb-6 flex items-center gap-2.5">
             <Logo size={34} />
-            <div>
+            <div className="flex-1 min-w-0">
               <div style={{ fontFamily: "'Fraunces', serif", fontSize: 15, fontWeight: 600, color: "#fff" }}>MeuFinanceiro</div>
               <div style={{ fontSize: 10.5, color: "#8B95A8", letterSpacing: "0.06em" }}>CONTROLE FAMILIAR · {currentYear}</div>
             </div>
+            <button onClick={() => setSidebarOpen(false)} className="lg:hidden p-1.5 rounded-md flex-shrink-0" style={{ color: "#C7CEDA" }}><X size={18} /></button>
           </div>
-          <nav className="pl-2">
-            <LedgerTab icon={PieIcon} label="Dashboard" active={tab === "dashboard"} onClick={() => setTab("dashboard")} />
-            <LedgerTab icon={Calendar} label="Lançamentos" active={tab === "lancamentos"} onClick={() => setTab("lancamentos")} badge={pendingBadgeCount} />
-            <LedgerTab icon={Layers} label="Parcelas & Recorrências" active={tab === "recorrencias"} onClick={() => setTab("recorrencias")} badge={recurrenceBadgeCount} />
-            <LedgerTab icon={Settings2} label="Categorias" active={tab === "categorias"} onClick={() => setTab("categorias")} />
-            <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => setTab("conexao")} />
-            <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => setTab("relatorio")} />
-            <LedgerTab icon={ShieldAlert} label="Diagnóstico de Segurança" active={tab === "seguranca"} onClick={() => setTab("seguranca")} badge={isDefaultCredentials ? 1 : 0} />
+          <nav className="pl-2 overflow-y-auto flex-1">
+            <LedgerTab icon={PieIcon} label="Dashboard" active={tab === "dashboard"} onClick={() => { setTab("dashboard"); setSidebarOpen(false); }} />
+            <LedgerTab icon={Calendar} label="Lançamentos" active={tab === "lancamentos"} onClick={() => { setTab("lancamentos"); setSidebarOpen(false); }} badge={pendingBadgeCount} />
+            <LedgerTab icon={Layers} label="Parcelas & Recorrências" active={tab === "recorrencias"} onClick={() => { setTab("recorrencias"); setSidebarOpen(false); }} badge={recurrenceBadgeCount} />
+            <LedgerTab icon={Settings2} label="Categorias" active={tab === "categorias"} onClick={() => { setTab("categorias"); setSidebarOpen(false); }} />
+            <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => { setTab("conexao"); setSidebarOpen(false); }} />
+            <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => { setTab("relatorio"); setSidebarOpen(false); }} />
+            <LedgerTab icon={ShieldAlert} label="Diagnóstico de Segurança" active={tab === "seguranca"} onClick={() => { setTab("seguranca"); setSidebarOpen(false); }} badge={isDefaultCredentials ? 1 : 0} />
           </nav>
-          <div className="px-4 mt-auto pt-8">
-            <button onClick={() => setCredentialsModalOpen(true)} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
+          <div className="px-4 pt-4 pb-4 flex-shrink-0">
+            <button onClick={() => { setCredentialsModalOpen(true); setSidebarOpen(false); }} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               <KeyRound size={15} /> Alterar usuário e senha
             </button>
@@ -930,7 +1032,15 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         )}
 
         {/* ============ MAIN ============ */}
-        <main className="flex-1 min-w-0 px-8 py-8">
+        <main className="flex-1 min-w-0">
+          {/* Barra superior — só aparece em telas menores que o breakpoint lg */}
+          <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3" style={{ background: INK, borderBottom: `1px solid rgba(255,255,255,0.08)` }}>
+            <button onClick={() => setSidebarOpen(true)} className="p-1.5 rounded-md flex-shrink-0" style={{ color: "#fff" }} aria-label="Abrir menu"><Menu size={20} /></button>
+            <Logo size={24} />
+            <span className="truncate" style={{ fontFamily: "'Fraunces', serif", fontSize: 14, fontWeight: 600, color: "#fff" }}>MeuFinanceiro</span>
+          </div>
+
+          <div className="px-4 sm:px-6 lg:px-8 py-5 lg:py-8 max-w-full overflow-x-hidden">
           {tab === "dashboard" && (
             <DashboardTab
               dashboardScope={dashboardScope} setDashboardScope={setDashboardScope}
@@ -981,6 +1091,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               loginLog={loginLog} sheetConfig={sheetConfig} setTab={setTab}
             />
           )}
+          </div>
         </main>
       </div>
     </div>
@@ -1201,7 +1312,7 @@ function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentia
           <Field label="Novo usuário">
             <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className={inputCls} style={inputStyle} autoComplete="username" />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Nova senha"><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={inputCls} style={inputStyle} autoComplete="new-password" /></Field>
             <Field label="Confirmar nova senha"><input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={inputCls} style={inputStyle} autoComplete="new-password" /></Field>
           </div>
@@ -1295,7 +1406,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
           <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Resumo Executivo</h1>
           <p className="text-[13px] mt-1" style={{ color: SLATE }}>Visão consolidada das finanças da família.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
             <button onClick={() => setDashboardScope("month")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "month" ? INK : PAPER, color: dashboardScope === "month" ? "#fff" : INK }}>Mês</button>
             <button onClick={() => setDashboardScope("year")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "year" ? INK : PAPER, color: dashboardScope === "year" ? "#fff" : INK }}>Ano completo</button>
@@ -1442,7 +1553,7 @@ function BudgetsSection({ categories, transactions, catById, selectedMonth, budg
 
   return (
     <div className="ledger-card mb-6" style={{ background: PAPER }}>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2"><Target size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">Metas & Orçamentos por Categoria</h3></div>
         <button onClick={onManage} className="flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1.5 rounded-md btn-ghost" style={{ color: SAGE }}><Settings2 size={13} /> Gerenciar orçamentos</button>
       </div>
@@ -1612,7 +1723,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
           <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Lançamentos</h1>
           <p className="text-[13px] mt-1" style={{ color: SLATE }}>Janeiro a Dezembro — registre entradas e saídas mês a mês.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {archivedYearsList.length > 0 && (
             <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={inputCls} style={{ ...inputStyle, width: 160 }}>
               <option value={currentYear}>{currentYear} (ano atual)</option>
@@ -1910,7 +2021,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
           <button onClick={() => handleTypeChange("expense")} className="flex-1 py-2 text-[13px] font-medium" style={{ background: type === "expense" ? RUST : PAPER, color: type === "expense" ? "#fff" : INK }}>Despesa</button>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label={recurring && !isEditing ? "Mês inicial" : "Mês"}><select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls} style={inputStyle}>{MONTHS_FULL.map((m, i) => <option key={m} value={i}>{m}</option>)}</select></Field>
           <Field label="Valor (R$)">
             <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => { setAmount(e.target.value); setAmountError(""); }} placeholder="0,00" className={inputCls} style={inputStyle} />
@@ -1928,7 +2039,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: itens comprados, motivo do gasto, detalhes do contrato…" rows={2} maxLength={500} className={inputCls} style={{ ...inputStyle, resize: "vertical" }} />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Categoria"><select value={categoryId} onChange={(e) => handleCatChange(e.target.value)} className={inputCls} style={inputStyle}>{list.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
           <Field label="Subcategoria"><select value={subId} onChange={(e) => setSubId(e.target.value)} className={inputCls} style={inputStyle}>{activeCat?.subs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
         </div>
@@ -1961,7 +2072,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
                 </div>
 
                 {recurrenceMode === "installments" ? (
-                  <div className="grid grid-cols-2 gap-3 items-end">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
                     <Field label="Número de parcelas"><input type="number" min="2" max="48" value={installmentsCount} onChange={(e) => setInstallmentsCount(e.target.value)} className={inputCls} style={inputStyle} /></Field>
                     <div className="text-[11.5px] pb-2" style={{ color: SLATE }}>
                       Serão criados lançamentos de <b>{MONTHS_FULL[Number(month)]}</b> até{" "}
@@ -1975,7 +2086,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
                       <button onClick={() => setEndMode("indefinite")} className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[12px] font-medium" style={{ background: endMode === "indefinite" ? SAGE : PAPER, color: endMode === "indefinite" ? "#fff" : INK }}><InfinityIcon size={13} /> Sem data de término</button>
                     </div>
                     {endMode === "until" ? (
-                      <div className="grid grid-cols-2 gap-3 items-end">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
                         <Field label="Repetir até o mês"><select value={endMonth} onChange={(e) => setEndMonth(e.target.value)} className={inputCls} style={inputStyle}>{MONTHS_FULL.map((m, i) => <option key={m} value={i} disabled={i < Number(month)}>{m}</option>)}</select></Field>
                         <div className="text-[11.5px] pb-2" style={{ color: SLATE }}>Mesmo valor lançado todo mês, sem contagem de parcelas — ideal para assinaturas e mensalidades fixas.</div>
                       </div>
@@ -2142,7 +2253,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
             className={inputCls} style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, resize: "vertical" }} />
 
           {headers.length > 0 && (
-            <div className="grid grid-cols-2 gap-3 p-3.5 rounded-lg" style={{ border: `1px solid ${LINE}` }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-lg" style={{ border: `1px solid ${LINE}` }}>
               <Field label="Coluna de Data"><select value={mapping.date} onChange={(e) => setMapping((m) => ({ ...m, date: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
               <Field label="Coluna de Valor"><select value={mapping.amount} onChange={(e) => setMapping((m) => ({ ...m, amount: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
               <Field label="Coluna de Descrição"><select value={mapping.description} onChange={(e) => setMapping((m) => ({ ...m, description: e.target.value }))} className={inputCls} style={inputStyle}><option value="">Selecione…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></Field>
@@ -2261,7 +2372,7 @@ function ChangeAmountModal({ group, onClose, onConfirm }) {
     <Modal title="Alterar valor da recorrência" onClose={onClose}>
       <div className="space-y-3.5">
         <p className="text-[13px]" style={{ color: SLATE }}>Aplica um novo valor a <b style={{ color: INK }}>{group.description}</b> em diante, sem alterar ocorrências já pagas.</p>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="A partir de">
             <select value={fromMonth} onChange={(e) => setFromMonth(Number(e.target.value))} className={inputCls} style={inputStyle}>
               {MONTHS_FULL.map((m, i) => <option key={m} value={i} disabled={i < nextOpenMonth}>{m}</option>)}
@@ -2584,7 +2695,7 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="ledger-card" style={{ background: PAPER }}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <div className="flex items-center gap-2"><CreditCard size={15} color={GOLD} /><h3 className="text-[13.5px] font-semibold">Cartões de Crédito</h3></div>
             <button onClick={() => setCardModal({})} className="flex items-center gap-1 text-[12px] font-medium px-2.5 py-1.5 rounded-md btn-ghost" style={{ color: SAGE }}><Plus size={13} /> Adicionar</button>
           </div>
@@ -2610,7 +2721,7 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
         </div>
 
         <div className="ledger-card" style={{ background: PAPER }}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <div className="flex items-center gap-2"><Car size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Veículos & Financiamentos</h3></div>
             <button onClick={() => setVehicleModal({})} className="flex items-center gap-1 text-[12px] font-medium px-2.5 py-1.5 rounded-md btn-ghost" style={{ color: SAGE }}><Plus size={13} /> Adicionar</button>
           </div>
@@ -2649,7 +2760,7 @@ function CardModal({ initial, onClose, onSave }) {
     <Modal title={initial ? "Editar cartão" : "Novo cartão"} onClose={onClose}>
       <div className="space-y-3.5">
         <Field label="Nome do cartão"><input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} style={inputStyle} placeholder="Ex.: Nubank" /></Field>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Limite (R$)"><input type="number" value={limit} onChange={(e) => setLimit(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Fechamento"><input type="number" min="1" max="31" value={closingDay} onChange={(e) => setClosingDay(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Vencimento"><input type="number" min="1" max="31" value={dueDay} onChange={(e) => setDueDay(e.target.value)} className={inputCls} style={inputStyle} /></Field>
@@ -2674,7 +2785,7 @@ function VehicleModal({ initial, onClose, onSave }) {
     <Modal title={initial ? "Editar financiamento" : "Novo financiamento"} onClose={onClose}>
       <div className="space-y-3.5">
         <Field label="Nome do veículo"><input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} style={inputStyle} placeholder="Ex.: Spurs Car" /></Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Valor total (R$)"><input type="number" value={totalValue} onChange={(e) => setTotalValue(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Valor da parcela (R$)"><input type="number" value={installmentValue} onChange={(e) => setInstallmentValue(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Total de parcelas"><input type="number" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className={inputCls} style={inputStyle} /></Field>
@@ -2723,6 +2834,9 @@ function doGet(e) {
     Lancamentos: readSheet("Lancamentos"),
     Categorias: readSheet("Categorias"),
     Config: readSheet("Config"),
+    Cartoes: readSheet("Cartoes"),
+    Veiculos: readSheet("Veiculos"),
+    Orcamentos: readSheet("Orcamentos"),
   };
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -2797,7 +2911,7 @@ function doPost(e) {
       <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid #C7DBD0` }}>
         <div className="flex items-center gap-2 mb-2"><RefreshCw size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold" style={{ color: SAGE }}>Sincronização bidirecional (recomendado)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: INK }}>
-          Depois de configurar a URL abaixo, <b>todo lançamento (inclusive parcelas e recorrências) e toda categoria/subcategoria que você criar, editar ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
+          Depois de configurar a URL abaixo, <b>todo lançamento (inclusive parcelas e recorrências), categoria/subcategoria, cartão, veículo e orçamento que você criar, editar ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
           <br /><br />
           <b>Anos arquivados também ficam salvos aqui</b> (na coluna Ano) — mesmo limpando os dados do navegador, ao configurar essa mesma URL de novo e abrir o app, o histórico de anos arquivados é recuperado automaticamente (o app sincroniza sozinho assim que reconhece uma conexão já configurada).
         </p>
@@ -2845,6 +2959,7 @@ function doPost(e) {
           <li><b style={{ color: INK }}>1.</b> Crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com as colunas: ID, Ano, Mes, Tipo, CategoriaId, Categoria, SubcategoriaId, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento, Notas, ParcelaNumero, ParcelaTotal, RecorrenciaGrupoId, RecorrenciaIndefinida, BankId. A coluna <b>Ano</b> é o que permite que anos arquivados fiquem salvos na planilha permanentemente (não só o ano corrente).</li>
           <li><b style={{ color: INK }}>2.</b> Crie também uma segunda aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Categorias</code> com as colunas: ID, Tipo, CategoriaId, Categoria, Cor, SubcategoriaId, Subcategoria. É nela que suas categorias e subcategorias ficam salvas.</li>
           <li><b style={{ color: INK }}>2b.</b> Crie uma terceira aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Config</code> com as colunas: ID, Chave, Valor. É nela que fica salvo qual é o "ano corrente" do sistema — sem isso, se você limpar os dados do navegador depois de arquivar um ano, o app pode ficar confuso sobre qual ano está ativo.</li>
+          <li><b style={{ color: INK }}>2c.</b> Crie mais três abas: <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Cartoes</code> (colunas: ID, Nome, Limite, DiaFechamento, DiaVencimento, Cor), <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Veiculos</code> (colunas: ID, Nome, ValorTotal, TotalParcelas, ValorParcela, ParcelasPagas, MesInicio) e <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Orcamentos</code> (colunas: ID, CategoriaId, Limite, Ativo, Periodo). Todas opcionais — se você não usa alguma dessas funcionalidades no app, pode deixar a aba correspondente vazia (só com o cabeçalho) ou nem criar.</li>
           <li><b style={{ color: INK }}>3.</b> Para a importação simples em CSV (passo 1 acima, opcional): vá em <b>Arquivo → Compartilhar → Publicar na Web</b> (não confunda com o botão "Compartilhar" comum), escolha a aba <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> especificamente e o formato <b>CSV</b>. Essa publicação só cobre Lançamentos — Categorias sincroniza apenas pela via bidirecional (Apps Script, passo 4 abaixo).</li>
           <li><b style={{ color: INK }}>4.</b> Copie o link gerado e cole no campo do passo 1. Confira se o número depois de <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>gid=</code> corresponde à aba certa.</li>
         </ol>
@@ -2947,7 +3062,7 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
           <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Relatório Anual — {selectedYear}</h1>
           <p className="text-[13px] mt-1" style={{ color: SLATE }}>Consolidação mês a mês de todas as categorias, de Janeiro a Dezembro.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {archivedYearsList.length > 0 && (
             <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={inputCls} style={{ ...inputStyle, width: 160 }}>
               <option value={currentYear}>{currentYear} (ano atual)</option>
