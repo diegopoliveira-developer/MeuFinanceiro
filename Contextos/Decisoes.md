@@ -247,12 +247,39 @@ lançamento duplicado ou trabalho manual repetido.
 conciliação (duplicaria o que o usuário já lançava); derivar o mês da primeira parcela do
 campo `startMonth` do veículo (é gravado fixo em `0` no cadastro — seria um palpite errado).
 
-**Consequência**: vincular **não** altera categoria, valor nem o contador `paidInstallments`
-do veículo — só amarra o lançamento à parcela. Mexer em qualquer um desses três seria alterar
-dado que o usuário preencheu, sem ele ter pedido. Efeito colateral aceito: o card da série em
-Parcelas & Recorrências agrega sobre o total de parcelas do financiamento, incluindo as que
-foram pagas antes de o sistema existir e nunca viraram lançamento — registrado em
-`Notas/TODO.md`.
+**Consequência**: vincular **não** altera a categoria nem o valor do lançamento — mexer neles
+seria alterar dado que o usuário preencheu, sem ele ter pedido.
+
+---
+
+## 2026-08-15 · Parcelas pagas de um financiamento são derivadas dos lançamentos
+
+**Decisão**: o contador exibido ("45/48 parcelas") é **calculado** por
+`vehiclePaidInstallments()` = o valor informado no cadastro do veículo (parcelas quitadas antes
+de existirem como lançamento) **mais** as parcelas de número maior que esse já marcadas como
+pagas na lista de lançamentos. O campo `paidInstallments` do veículo deixa de ser o número
+exibido e passa a ser apenas o **ponto de partida**; não é reescrito ao marcar/desmarcar.
+
+**Substitui**: a decisão registrada acima nesta mesma data, que dizia que vincular não mexia no
+contador. O usuário marcou uma parcela como paga e o card continuou em 45/48 — o contador
+precisa refletir o pagamento, e o comportamento anterior estava errado do ponto de vista de
+quem usa.
+
+**Motivo**: o lançamento é a fonte da verdade do que foi pago. Derivar mantém as duas coisas
+coerentes por construção — ao desmarcar, o número volta sozinho — e elimina a classe inteira de
+bug em que o contador armazenado se desalinha dos lançamentos (F5, sincronização com a
+planilha, exclusão de lançamento, importação de extrato).
+
+**Alternativas rejeitadas**: incrementar/decrementar o campo armazenado a cada
+marcação (só a exclusão de um lançamento pago já bastaria para desalinhar, e a planilha
+guardaria um número que discorda dos próprios lançamentos que ela também guarda); usar a maior
+parcela paga em vez da contagem (diria "48 de 48 pagas" com a 47 em aberto, se a 48 fosse paga
+antes).
+
+**Consequência**: a coluna `ParcelasPagas` da planilha continua guardando o ponto de partida,
+não o total pago — quem ler a planilha direto precisa saber disso. O campo "Parcelas já pagas"
+do cadastro ganhou uma explicação na própria tela para não induzir o usuário a corrigi-lo todo
+mês.
 
 ---
 

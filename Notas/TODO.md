@@ -43,13 +43,20 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       **Testado na interface real**: veículo 45/48 pagas gerou 3 parcelas em aberto (46, 47,
       48), a de Julho casou sozinha com um lançamento de R$ 850 que já existia, e as de Agosto
       e Setembro foram criadas — as três agrupadas na aba Parcelas & Recorrências.
-      **Limitação conhecida** (não é regressão, é consequência do modelo): o card da série em
-      Parcelas & Recorrências calcula o total por `parcelas × valor`, então mostra
-      "0 de 48 pagas · restam R$ 40.800" mesmo quando as 45 primeiras foram pagas antes de o
-      sistema existir e nunca viraram lançamento. Ver item abaixo.
-- [ ] **Agregado da série de financiamento conta parcelas que nunca existiram como lançamento**
-      (surgiu com a T2). Decidir como tratar: usar `paidInstallments` do veículo como piso na
-      contagem do card, ou exibir o agregado só sobre as parcelas realmente lançadas.
+- [x] **T2b · Marcar a parcela como paga passa a atualizar o financiamento.** ✅ **2026-08-15**,
+      a partir do relato do usuário: ele marcou a parcela como paga e o card em Categorias
+      continuou em 45/48. Novo helper `vehiclePaidInstallments()` — o número exibido passou a
+      ser derivado dos lançamentos (Dashboard, Categorias e a própria tela de parcelas em
+      aberto usam todos ele). Decisão e alternativas em `Contextos/Decisoes.md`.
+      **Testado na interface real**: 45/48 → 46/48 ao marcar como pago, volta a 45/48 ao
+      desmarcar, chega a 48/48 com as três pagas — e o botão de "parcelas em aberto" some do
+      card quando não há mais nenhuma. Dashboard e Categorias concordam entre si.
+- [ ] **Card da série em Parcelas & Recorrências ignora as parcelas anteriores ao sistema.**
+      Mostra "3 de 48 parcelas pagas · restam R$ 38.250" para um financiamento onde 45
+      parcelas já foram quitadas antes de existirem como lançamento — ele conta só o que virou
+      lançamento, mas compara com o total do financiamento. Diferente do card de Categorias,
+      que já usa `vehiclePaidInstallments()`. Decidir: usar o mesmo helper quando a série tem
+      `vehicleId`, ou deixar claro no texto que o agregado é só das parcelas lançadas.
 - [ ] **T3 · Tooltip da descrição do lançamento.** Passar o mouse sobre o nome na lista deve
       mostrar a descrição. Hoje o `title` da linha mostra as **observações** (`notes`), não a
       descrição — confirmar se o pedido é trocar ou somar as duas informações.

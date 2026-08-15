@@ -152,3 +152,52 @@ por exigir autorização.
 
 Criado .claude/launch.json (configuração local para subir o servidor de
 desenvolvimento). Nenhum commit, push ou deploy executado.
+
+================================================================================
+DATA: 2026-08-15 20:22:40
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Quando eu marquei a parcela como paga, ele não incrementou em categorias, as
+parcelas pagas do financiamento do veículo.
+
+Agente:
+Relato procedente. Era a limitação que eu mesmo havia registrado ao entregar a
+T2 ("vincular não altera o contador paidInstallments") — do ponto de vista de
+quem usa, o comportamento estava errado: o card continuava em 45/48 depois de a
+parcela ser marcada como paga.
+
+Corrigido com um helper novo, vehiclePaidInstallments(vehicle, transactions): o
+número exibido passou a ser derivado — o valor informado no cadastro (parcelas
+quitadas antes de virarem lançamento aqui) mais as parcelas de número maior já
+marcadas como pagas na lista. Aplicado nos três lugares que mostram progresso:
+painel de Financiamentos do Dashboard, card de Veículos em Categorias e o cálculo
+de parcelas em aberto (inclusive o botão que abre a conciliação, que agora some
+quando não há mais parcela em aberto). O campo paidInstallments do veículo deixou
+de ser o número exibido e passou a ser só o ponto de partida; não é reescrito ao
+marcar/desmarcar, e a coluna ParcelasPagas da planilha continua guardando esse
+ponto de partida.
+
+Escolhida a derivação em vez de incrementar o campo armazenado porque o
+lançamento é a fonte da verdade do que foi pago: derivando, marcar e desmarcar
+ficam coerentes por construção e some a classe de bug em que o contador se
+desalinha dos lançamentos (F5, sincronização, exclusão de lançamento, importação
+de extrato). Registrado em Decisoes.md como decisão que substitui a anterior, com
+as alternativas rejeitadas. Acrescentada também uma explicação no formulário do
+veículo, para o usuário não achar que precisa corrigir "Parcelas já pagas" todo
+mês.
+
+Testado na interface real: 45/48 vira 46/48 ao marcar como pago; volta a 45/48 ao
+desmarcar; chega a 48/48 com as três parcelas pagas e o botão de parcelas em
+aberto desaparece; Dashboard e Categorias concordam entre si. Console sem erros
+de aplicação e sem avisos do React.
+
+Fica registrado em Notas/TODO.md um ponto adjacente ainda em aberto: o card da
+série em Parcelas & Recorrências mostra "3 de 48 parcelas pagas" porque conta só
+o que virou lançamento, sem considerar as 45 anteriores ao sistema.
+
+Durante o trabalho, o build quebrou uma vez por um bug conhecido do npm com
+dependências opcionais (@rollup/rollup-win32-x64-msvc ausente); resolvido com um
+npm install novo, dentro da autorização já dada.

@@ -189,6 +189,13 @@ inicializa sem `document` e falha de forma confusa.
   parcela/recorrência — duplicar a parcela 3/12 não pode criar um elo novo com a série.
 - **Confirmação por digitação** é o padrão das operações destrutivas: "RESETAR" para apagar
   tudo, "ARQUIVAR" para fechar o ano. Não substituir por um clique simples.
+- **`vehicle.paidInstallments` NÃO é o número de parcelas pagas exibido** — é só o ponto de
+  partida (o que foi quitado antes de virar lançamento aqui). O número exibido vem de
+  `vehiclePaidInstallments(vehicle, transactions)`, que soma a esse valor as parcelas de
+  número maior já marcadas como pagas. Quem ler o campo cru — no estado, na planilha
+  (`ParcelasPagas`) ou no formulário de edição — vai ver um número menor que o da tela, e isso
+  é o esperado. Ao criar qualquer lugar novo que mostre progresso de financiamento, usar o
+  helper, nunca o campo.
 
 ---
 

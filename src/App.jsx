@@ -137,6 +137,20 @@ const sanitizeForSheet = (value) => {
   return /^[=+\-@\t\r]/.test(str) ? "'" + str : str;
 };
 
+// Parcelas pagas de um financiamento = o que foi informado no cadastro (parcelas quitadas antes
+// de existirem como lançamento aqui) + as parcelas seguintes já marcadas como pagas na lista de
+// lançamentos. É derivado, não armazenado: o lançamento é a fonte da verdade do que foi pago,
+// então o contador nunca fica dessincronizado dele — nem ao marcar, nem ao desmarcar.
+const vehiclePaidInstallments = (vehicle, transactions) => {
+  const baseline = Number(vehicle.paidInstallments) || 0;
+  const total = Number(vehicle.totalInstallments) || 0;
+  const extras = transactions.filter((t) =>
+    t.vehicleId === vehicle.id && t.paid && Number(t.installmentNumber) > baseline
+  ).length;
+  const paid = baseline + extras;
+  return total > 0 ? Math.min(total, paid) : paid;
+};
+
 // "paid" | "overdue" | "soon" | "pending"
 function paymentStatus(t) {
   if (t.paid) return "paid";
@@ -1520,15 +1534,16 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
           <div className="flex items-center gap-2 mb-3"><Car size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Financiamentos de Veículos</h3></div>
           <div className="space-y-3">
             {vehicles.map((v) => {
-              const pct = (v.paidInstallments / v.totalInstallments) * 100;
+              const paid = vehiclePaidInstallments(v, transactions);
+              const pct = (paid / v.totalInstallments) * 100;
               return (
                 <div key={v.id}>
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[12.5px] font-medium">{v.name}</span>
-                    <span className="text-[12px]" style={{ color: SLATE }}>{v.paidInstallments}/{v.totalInstallments} parcelas</span>
+                    <span className="text-[12px]" style={{ color: SLATE }}>{paid}/{v.totalInstallments} parcelas</span>
                   </div>
                   <div className="h-1.5 rounded-full mb-1" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: SAGE }} /></div>
-                  <div className="text-[11.5px]" style={{ color: SLATE }}>{brl(v.installmentValue)}/mês · restam {brl((v.totalInstallments - v.paidInstallments) * v.installmentValue)}</div>
+                  <div className="text-[11.5px]" style={{ color: SLATE }}>{brl(v.installmentValue)}/mês · restam {brl((v.totalInstallments - paid) * v.installmentValue)}</div>
                 </div>
               );
             })}
@@ -2690,7 +2705,7 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
   const [vehicleModal, setVehicleModal] = useState(null);
   const [installmentsFor, setInstallmentsFor] = useState(null);
 
-  const openInstallmentsOf = (v) => Math.max(0, (Number(v.totalInstallments) || 0) - (Number(v.paidInstallments) || 0));
+  const openInstallmentsOf = (v) => Math.max(0, (Number(v.totalInstallments) || 0) - vehiclePaidInstallments(v, transactions));
 
   const applyInstallments = ({ toCreate, toLink }) => {
     if (toCreate.length) addTransactionSeries(toCreate);
@@ -2755,8 +2770,8 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
                     <button onClick={() => deleteVehicle(v.id)} className="p-1 rounded-md btn-ghost"><Trash2 size={12.5} color={RUST} /></button>
                   </div>
                 </div>
-                <div className="text-[11px] mb-1.5" style={{ color: SLATE }}>{v.paidInstallments}/{v.totalInstallments} parcelas de {brl(v.installmentValue)} · valor total {brl(v.totalValue)}</div>
-                <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${(v.paidInstallments / v.totalInstallments) * 100}%`, background: SAGE }} /></div>
+                <div className="text-[11px] mb-1.5" style={{ color: SLATE }}>{vehiclePaidInstallments(v, transactions)}/{v.totalInstallments} parcelas de {brl(v.installmentValue)} · valor total {brl(v.totalValue)}</div>
+                <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${(vehiclePaidInstallments(v, transactions) / v.totalInstallments) * 100}%`, background: SAGE }} /></div>
               </div>
             ))}
             {!vehicles.length && <EmptyState icon={Car} title="Nenhum veículo cadastrado" desc="Adicione o Spurs Car ou outro financiamento para acompanhar." />}
@@ -2834,6 +2849,11 @@ function VehicleModal({ initial, onClose, onSave }) {
           <Field label="Total de parcelas"><input type="number" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Parcelas já pagas"><input type="number" value={paidInstallments} onChange={(e) => setPaidInstallments(e.target.value)} className={inputCls} style={inputStyle} /></Field>
         </div>
+        <div className="text-[11.5px]" style={{ color: SLATE, fontFamily: "Inter, sans-serif" }}>
+          "Parcelas já pagas" são as que foram quitadas <b>antes</b> de virarem lançamento aqui. As
+          que você marcar como pagas na lista de lançamentos são somadas a esse número
+          automaticamente — não precisa alterar este campo a cada mês.
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
           <button onClick={() => name.trim() && onSave({ name: name.trim(), totalValue: parseFloat(totalValue) || 0, totalInstallments: Number(totalInstallments), installmentValue: parseFloat(installmentValue) || 0, paidInstallments: Number(paidInstallments), startMonth: 0 })} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium">Salvar</button>
@@ -2859,7 +2879,9 @@ const vehicleGroupId = (vehicleId) => `veh_${vehicleId}`;
 
 function VehicleInstallmentsModal({ vehicle, transactions, categories, selectedMonth, currentYear, onConfirm, onClose }) {
   const totalInstallments = Number(vehicle.totalInstallments) || 0;
-  const paidInstallments = Number(vehicle.paidInstallments) || 0;
+  // Derivado, não o campo do cadastro: parcela já marcada como paga na lista não deve reaparecer
+  // aqui como "em aberto".
+  const paidInstallments = vehiclePaidInstallments(vehicle, transactions);
   const openCount = Math.max(0, totalInstallments - paidInstallments);
   const installmentValue = Number(vehicle.installmentValue) || 0;
 
