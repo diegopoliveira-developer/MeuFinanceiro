@@ -186,3 +186,24 @@ Só necessário se você quiser usar a importação simples via CSV (aba "Conex�
 
 Na aba Lançamentos, o botão "Importar extrato" abre um assistente que lê um CSV do seu banco (reconhece automaticamente o formato do Nubank — colunas Data, Valor, Identificador, Descrição), mostra uma prévia editável antes de confirmar, detecta duplicatas (por Identificador, se a coluna existir) e permite mapear colunas manualmente para outros formatos de banco.
 
+## Para quem vai desenvolver (ou para a IA)
+
+Este README é a documentação de **uso**. A documentação de **desenvolvimento** fica em
+[`Contextos/`](Contextos/) — comece por [`Contextos/LEIA-PRIMEIRO.md`](Contextos/LEIA-PRIMEIRO.md).
+
+| Arquivo | O que é |
+| --- | --- |
+| [`Contextos/Basic AI Project Rules.md`](Contextos/Basic%20AI%20Project%20Rules.md) | Norma de prioridade máxima. |
+| [`Contextos/Projeto.md`](Contextos/Projeto.md) | O que este projeto é, seu escopo e seu não-escopo. |
+| [`Contextos/Convencoes.md`](Contextos/Convencoes.md) | Arquitetura e convenções de código (normativo). |
+| [`Contextos/Ambientes.md`](Contextos/Ambientes.md) | Build, deploy e procedimento de teste. |
+| [`Contextos/Decisoes.md`](Contextos/Decisoes.md) | Por que cada coisa é como é. |
+| [`Contextos/Conhecimento.md`](Contextos/Conhecimento.md) | Armadilhas técnicas já descobertas. |
+| [`Notas/TODO.md`](Notas/TODO.md) | Backlog técnico. |
+
+Dois avisos que valem para qualquer alteração:
+
+- **`npm run deploy` publica em produção** — o site em uso pela família.
+- **As abas e colunas da planilha do Google são contrato**: acrescentar coluna é seguro,
+  renomear ou remover quebra a planilha de quem já usa.
+

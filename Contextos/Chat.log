@@ -1,0 +1,154 @@
+################################################################################
+# Chat.log — MeuFinanceiro
+#
+# Arquivo APPEND-ONLY, parte da documentação oficial do projeto conforme
+# "Basic AI Project Rules.md".
+#
+# REGRAS:
+#   - Nunca apagar conteúdo existente.
+#   - Nunca alterar registros anteriores.
+#   - Nunca resumir registros antigos.
+#   - Sempre acrescentar novos registros AO FINAL do arquivo.
+#   - Todo novo agente deve consultar este arquivo antes de iniciar trabalho.
+#
+# ROTAÇÃO: ao passar de 400 linhas, mover os registros mais antigos VERBATIM
+# para Contextos/Historico/Chat-AAAA-MM.log (ver Convencoes.md, secao 8.2).
+#
+# FORMATO:
+#   ============================================================================
+#   DATA: AAAA-MM-DD HH:MM:SS
+#   USUÁRIO: nome
+#   AGENTE: nome do agente
+#   ============================================================================
+#
+#   Usuário:
+#   Texto original da interação.
+#
+#   Agente:
+#   Texto original da resposta.
+################################################################################
+
+================================================================================
+DATA: 2026-08-15 19:04:18
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+1) Inicie lendo o arquivo CLAUDE.md, e siga as orientações.
+2) Após terminar e entender todo o escopo básico das regras, leia o arquivo
+Contextos\CONTEXT.md (Que indica as informações pertinentes a este projeto e
+atualize todo o contexto do projeto, incluindo as informações mais específicas
+no arquivo Contextos\Projeto.md.
+3) Por fim pode remover definitivamente o arquivo Contextos\CONTEXT.md
+
+Agente:
+Primeiro registro deste Chat.log. Lidos CLAUDE.md, LEIA-PRIMEIRO.md,
+Basic AI Project Rules.md e todos os arquivos de Contextos/ (todos ainda como
+esqueleto do kit-modelo, com placeholders {{...}}). Lido o CONTEXT.md — o
+documento de contexto anterior do projeto, em formato próprio, com escopo,
+arquitetura e o histórico versão a versão (v1 a v20).
+
+Antes de escrever, inspecionei o código real para conferir o que o CONTEXT.md
+afirmava: src/App.jsx (3.367 linhas), src/main.jsx, index.html, package.json,
+vite/tailwind/postcss config, firebase.json, vercel.json, .gitignore e o que
+está versionado no Git. O conteúdo confere, com duas divergências: os arquivos
+"dashboard-financeiro-familiar.jsx", "meufinanceiro-projeto.zip",
+"RELATORIO_AUDITORIA_SEGURANCA.md" e "PROMPT_AUDITORIA_SEGURANCA_AJUSTADO.md"
+citados pelo CONTEXT.md não existem neste repositório (a fonte da verdade hoje
+é src/App.jsx), e não há nenhuma suíte de testes versionada aqui — a bateria
+end-to-end citada no histórico rodava fora do repo.
+
+Contexto migrado do CONTEXT.md para a estrutura da norma, cada assunto no seu
+dono:
+- Contextos/Projeto.md — preenchido por completo: identidade, problema, escopo
+  e não-escopo, vocabulário do domínio (17 termos), stack, superfície pública,
+  restrições, integrações e estado atual.
+- Contextos/Convencoes.md — arquitetura em camadas com as regras de dependência
+  proibidas, estrutura de diretórios, tabela do marcador de comentário correto
+  por extensão, regras de código da stack, nomenclatura, documentação e regras
+  de trabalho.
+- Contextos/Ambientes.md — três ambientes (produção existe e está em uso),
+  dependências, comandos, tratamento de erro e o procedimento de teste manual.
+- Contextos/Decisoes.md — 13 decisões registradas, 12 delas reconstruídas do
+  histórico v1-v20 com a data de registro declarada (a data original não é
+  recuperável) e a última sobre a própria adoção deste padrão de contexto.
+- Contextos/Conhecimento.md — 20 armadilhas reais e o inventário de helpers e
+  componentes já existentes, para não recriar.
+- Notas/TODO.md — backlog em três grupos, incluindo 6 pendências de
+  conformidade que a inspeção revelou.
+- CLAUDE.md e LEIA-PRIMEIRO.md — placeholders substituídos, regras críticas e
+  comandos preenchidos.
+- README.md — restaurado. Estava sobrescrito pelo README do kit-modelo (que
+  descreve o próprio kit, não este projeto); recuperado do último commit e
+  acrescentada uma seção apontando para Contextos/.
+
+CONTEXT.md removido em definitivo conforme autorização explícita do item 3.
+Ressalva informada ao usuário: o arquivo nunca foi versionado (não rastreado
+pelo Git), então a remoção é irreversível pelo repositório.
+
+Nenhuma linha de código do app foi alterada. Nenhuma operação de Git, build ou
+deploy foi executada.
+
+================================================================================
+DATA: 2026-08-15 19:41:05
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Pediu para criar 10 tarefas no TODO (modal que não fecha ao clicar fora;
+vincular parcelas em aberto de veículo a lançamentos; tooltip com a descrição;
+dashboard de cartões; conciliação do extrato com lançamentos existentes; editar
+vencimento e valor direto na lista; corrigir "vencido" considerando dia útil;
+onde a senha fica salva e se vai para a planilha; marcar lançamento como "não
+será pago"), organizá-las por prioridade e começar executando as duas primeiras.
+
+Agente:
+As 10 tarefas entraram em Notas/TODO.md como "Fila atual", mantendo a numeração
+T1-T10 do pedido e com uma ordem de execução proposta pela ordem de decisão da
+norma (Segurança > Correção > Simplicidade). Duas observações levantadas na
+leitura do código, não no pedido: (i) T8 tem um bug confirmado — paymentStatus()
+compara a data de vencimento à meia-noite com TODAY, que carrega a hora atual,
+então o lançamento aparece como vencido no próprio dia do vencimento; (ii) T9 era
+uma pergunta — a senha é salva como hash SHA-256 de "usuario:senha" em
+localStorage (meufinanceiro_auth_v1), nunca em texto puro e nunca na planilha;
+levá-la para a planilha expõe o hash a quem tiver a URL do Apps Script, então
+ficou registrada como decisão pendente com quatro opções e recomendação.
+
+Perguntado ao usuário: (a) o que "vincular parcelas em aberto" significava, já
+que havia duas leituras com trabalhos diferentes — respondeu "os dois"; (b)
+autorização para rodar npm install no Windows, sem o que nada podia ser testado
+— autorizada.
+
+T1 implementada: o componente Modal ganhou a prop closeOnBackdrop (padrão true,
+para nenhum outro modal mudar de comportamento) e TransactionModal passa false.
+
+T2 implementada nas duas modalidades: novo componente VehicleInstallmentsModal,
+que abre sozinho ao cadastrar um financiamento com parcelas em aberto e volta
+pelo botão de lista no card do veículo. Cada parcela em aberto pode gerar um
+lançamento novo, ser vinculada a um lançamento já existente daquele mês ou ser
+ignorada; quando existe um lançamento com exatamente o valor da parcela, a linha
+já nasce sugerindo o vínculo. addVehicle passou a devolver o veículo criado para
+permitir o encadeamento. Vincular não altera categoria, valor nem o contador de
+parcelas pagas do veículo — decisão registrada em Decisoes.md.
+
+Testado de verdade, na interface real (npm run dev + navegador), não só por
+inspeção de código: build limpo; T1 — com o formulário preenchido, clique no
+backdrop mantém o modal aberto e o texto intacto, Cancelar fecha, e o modal de
+financiamento continua fechando ao clicar fora (sem regressão); T2 — veículo
+45/48 pagas gerou as parcelas 46, 47 e 48, a de Julho casou sozinha com um
+lançamento de R$ 850 preexistente, Agosto e Setembro foram criadas, e as três
+apareceram agrupadas em Parcelas & Recorrências. Console sem erros e sem avisos
+do React.
+
+Achados de ambiente registrados em Conhecimento.md e Ambientes.md: o
+node_modules estava instalado para Linux (WSL) e o build não rodava no Windows;
+e a árvore tinha Vite 8.1.5 fora do ^5.4.0 declarado no package.json (assinatura
+de um npm audit fix --force anterior), que o npm install autorizado reverteu
+para 5.4.21 — se a subida de major for para valer, precisa ir para o
+package.json. npm audit acusa 3 vulnerabilidades; nenhuma correção aplicada,
+por exigir autorização.
+
+Criado .claude/launch.json (configuração local para subir o servidor de
+desenvolvimento). Nenhum commit, push ou deploy executado.

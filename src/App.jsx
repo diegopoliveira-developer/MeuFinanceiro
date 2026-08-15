@@ -311,9 +311,12 @@ function Field({ label, children }) {
 const inputCls = "w-full px-3 py-2 text-[13px] rounded-md outline-none transition-colors";
 const inputStyle = { background: PAPER, border: `1px solid ${LINE}`, color: INK, fontFamily: "Inter, sans-serif" };
 
-function Modal({ title, onClose, children, wide }) {
+// closeOnBackdrop={false} para formulários longos (ex.: novo lançamento com parcelamento):
+// um clique no fundo apagaria tudo que foi digitado. Nesses casos o modal só fecha pelo X,
+// pelo botão Cancelar ou ao salvar.
+function Modal({ title, onClose, children, wide, closeOnBackdrop = true }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(16,27,45,0.55)", backdropFilter: "blur(2px)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(16,27,45,0.55)", backdropFilter: "blur(2px)" }} onClick={closeOnBackdrop ? onClose : undefined}>
       <div onClick={(e) => e.stopPropagation()} className="w-full rounded-xl overflow-hidden flex flex-col" style={{ maxWidth: wide ? 640 : 440, maxHeight: "90vh", background: PARCHMENT, border: `1px solid ${LINE}`, boxShadow: "0 24px 60px rgba(16,27,45,0.35)" }}>
         <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ borderBottom: `1px solid ${LINE}` }}>
           <h3 className="text-[15px] font-semibold" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{title}</h3>
@@ -557,10 +560,13 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     deleteFromSheet("Cartoes", [id]);
   };
 
+  // Devolve o veículo criado (com o id) para quem chamou poder encadear — é o que permite
+  // abrir a conciliação de parcelas logo após o cadastro.
   const addVehicle = (v) => {
     const full = { id: uid(), ...v };
     setVehicles((prev) => [...prev, full]);
     pushToSheet({ Veiculos: [toVehicleRow(full)] });
+    return full;
   };
   const updateVehicle = (id, patch) => {
     setVehicles((prev) => {
@@ -1076,6 +1082,8 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               cards={cards} addCard={addCard} updateCard={updateCard} deleteCard={deleteCard}
               vehicles={vehicles} addVehicle={addVehicle} updateVehicle={updateVehicle} deleteVehicle={deleteVehicle}
               cardInvoice={cardInvoice} selectedMonth={selectedMonth}
+              transactions={transactions} addTransactionSeries={addTransactionSeries}
+              updateTransaction={updateTransaction} currentYear={currentYear}
             />
           )}
           {tab === "conexao" && (
@@ -2014,7 +2022,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
   };
 
   return (
-    <Modal title={initial ? "Editar lançamento" : isDuplicating ? "Duplicar lançamento" : "Novo lançamento"} onClose={onClose} wide>
+    <Modal title={initial ? "Editar lançamento" : isDuplicating ? "Duplicar lançamento" : "Novo lançamento"} onClose={onClose} wide closeOnBackdrop={false}>
       <div className="space-y-3.5">
         <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
           <button onClick={() => handleTypeChange("income")} className="flex-1 py-2 text-[13px] font-medium" style={{ background: type === "income" ? SAGE : PAPER, color: type === "income" ? "#fff" : INK }}>Receita</button>
@@ -2677,9 +2685,18 @@ function CategoryColumn({ title, type, list, addCategory, deleteCategory, addSub
   );
 }
 
-function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory, deleteSubcategory, cards, addCard, updateCard, deleteCard, vehicles, addVehicle, updateVehicle, deleteVehicle, cardInvoice, selectedMonth }) {
+function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory, deleteSubcategory, cards, addCard, updateCard, deleteCard, vehicles, addVehicle, updateVehicle, deleteVehicle, cardInvoice, selectedMonth, transactions, addTransactionSeries, updateTransaction, currentYear }) {
   const [cardModal, setCardModal] = useState(null);
   const [vehicleModal, setVehicleModal] = useState(null);
+  const [installmentsFor, setInstallmentsFor] = useState(null);
+
+  const openInstallmentsOf = (v) => Math.max(0, (Number(v.totalInstallments) || 0) - (Number(v.paidInstallments) || 0));
+
+  const applyInstallments = ({ toCreate, toLink }) => {
+    if (toCreate.length) addTransactionSeries(toCreate);
+    toLink.forEach(({ id, patch }) => updateTransaction(id, patch));
+    setInstallmentsFor(null);
+  };
 
   return (
     <div className="fade-up">
@@ -2731,6 +2748,9 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-[12.5px] font-medium">{v.name}</div>
                   <div className="flex items-center gap-1">
+                    {openInstallmentsOf(v) > 0 && (
+                      <button onClick={() => setInstallmentsFor(v)} title="Lançar ou vincular as parcelas em aberto" className="p-1 rounded-md btn-ghost"><ListOrdered size={12.5} color={SAGE} /></button>
+                    )}
                     <button onClick={() => setVehicleModal(v)} className="p-1 rounded-md btn-ghost"><Pencil size={12.5} color={SLATE} /></button>
                     <button onClick={() => deleteVehicle(v.id)} className="p-1 rounded-md btn-ghost"><Trash2 size={12.5} color={RUST} /></button>
                   </div>
@@ -2745,7 +2765,30 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
       </div>
 
       {cardModal && <CardModal initial={cardModal.id ? cardModal : null} onClose={() => setCardModal(null)} onSave={(data) => { cardModal.id ? updateCard(cardModal.id, data) : addCard(data); setCardModal(null); }} />}
-      {vehicleModal && <VehicleModal initial={vehicleModal.id ? vehicleModal : null} onClose={() => setVehicleModal(null)} onSave={(data) => { vehicleModal.id ? updateVehicle(vehicleModal.id, data) : addVehicle(data); setVehicleModal(null); }} />}
+      {vehicleModal && (
+        <VehicleModal
+          initial={vehicleModal.id ? vehicleModal : null}
+          onClose={() => setVehicleModal(null)}
+          onSave={(data) => {
+            if (vehicleModal.id) {
+              updateVehicle(vehicleModal.id, data);
+            } else {
+              // Cadastro novo com parcelas em aberto emenda direto na conciliação —
+              // é o momento em que o usuário tem o financiamento fresco na cabeça.
+              const created = addVehicle(data);
+              if (created && openInstallmentsOf(created) > 0) setInstallmentsFor(created);
+            }
+            setVehicleModal(null);
+          }}
+        />
+      )}
+      {installmentsFor && (
+        <VehicleInstallmentsModal
+          vehicle={installmentsFor} transactions={transactions} categories={categories}
+          selectedMonth={selectedMonth} currentYear={currentYear}
+          onConfirm={applyInstallments} onClose={() => setInstallmentsFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2796,6 +2839,179 @@ function VehicleModal({ initial, onClose, onSave }) {
           <button onClick={() => name.trim() && onSave({ name: name.trim(), totalValue: parseFloat(totalValue) || 0, totalInstallments: Number(totalInstallments), installmentValue: parseFloat(installmentValue) || 0, paidInstallments: Number(paidInstallments), startMonth: 0 })} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium">Salvar</button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+/* =========================================================================
+   PARCELAS EM ABERTO DE UM FINANCIAMENTO
+   -------------------------------------------------------------------------
+   O cadastro do veículo só guarda quantas parcelas existem e quantas já foram
+   pagas — não guarda a data de início do financiamento. Por isso o mês da
+   próxima parcela em aberto é escolhido aqui pelo usuário, e as demais seguem
+   mês a mês a partir dele.
+
+   Cada parcela em aberto pode: gerar um lançamento novo, ser vinculada a um
+   lançamento que já existe naquele mês (evita duplicar o que o usuário já
+   lançava à mão) ou ser ignorada.
+   ========================================================================= */
+const vehicleGroupId = (vehicleId) => `veh_${vehicleId}`;
+
+function VehicleInstallmentsModal({ vehicle, transactions, categories, selectedMonth, currentYear, onConfirm, onClose }) {
+  const totalInstallments = Number(vehicle.totalInstallments) || 0;
+  const paidInstallments = Number(vehicle.paidInstallments) || 0;
+  const openCount = Math.max(0, totalInstallments - paidInstallments);
+  const installmentValue = Number(vehicle.installmentValue) || 0;
+
+  const vehicleCat = categories.expense.find((c) => c.id === "veiculos") || categories.expense[0];
+  const [categoryId, setCategoryId] = useState(vehicleCat?.id || "");
+  const activeCat = categories.expense.find((c) => c.id === categoryId) || vehicleCat;
+  const [subId, setSubId] = useState(activeCat?.subs[0]?.id || "");
+  const [startMonth, setStartMonth] = useState(selectedMonth);
+  const [dueDay, setDueDay] = useState(10);
+
+  // Parcelas que cabem no ano corrente. Mesmo critério já usado no lançamento parcelado:
+  // a série não ultrapassa dezembro — o resto entra no ano seguinte, depois de arquivar.
+  const slots = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < openCount; i++) {
+      const month = Number(startMonth) + i;
+      if (month > 11) break;
+      out.push({ number: paidInstallments + 1 + i, month });
+    }
+    return out;
+  }, [openCount, startMonth, paidInstallments]);
+
+  // Candidatos a vínculo: despesa do mesmo mês, sem cartão e ainda sem outro veículo.
+  const candidatesFor = useCallback((month) => transactions.filter((t) =>
+    t.month === month && t.type === "expense" && !t.cardId && (!t.vehicleId || t.vehicleId === vehicle.id)
+  ), [transactions, vehicle.id]);
+
+  // Sugestão automática: se existe um lançamento no mês com exatamente o valor da parcela,
+  // a linha já nasce como "vincular" apontando para ele. Caso contrário, "gerar".
+  const buildDefaults = useCallback(() => {
+    const used = new Set();
+    const next = {};
+    slots.forEach((slot) => {
+      const match = candidatesFor(slot.month).find((t) => !used.has(t.id) && Math.abs(Number(t.amount || 0) - installmentValue) < 0.01);
+      if (match) { used.add(match.id); next[slot.number] = { mode: "link", txId: match.id }; }
+      else next[slot.number] = { mode: "create", txId: "" };
+    });
+    return next;
+  }, [slots, candidatesFor, installmentValue]);
+
+  const [actions, setActions] = useState(buildDefaults);
+  const [appliedStart, setAppliedStart] = useState(startMonth);
+  if (appliedStart !== startMonth) { setAppliedStart(startMonth); setActions(buildDefaults()); }
+
+  const setMode = (number, mode) => setActions((prev) => ({ ...prev, [number]: { ...prev[number], mode, txId: mode === "link" ? (prev[number]?.txId || "") : "" } }));
+  const setTx = (number, txId) => setActions((prev) => ({ ...prev, [number]: { ...prev[number], txId } }));
+
+  const createCount = slots.filter((s) => actions[s.number]?.mode === "create").length;
+  const linkCount = slots.filter((s) => actions[s.number]?.mode === "link" && actions[s.number]?.txId).length;
+
+  const confirm = () => {
+    const groupId = vehicleGroupId(vehicle.id);
+    const toCreate = [];
+    const toLink = [];
+    slots.forEach((slot) => {
+      const action = actions[slot.number];
+      if (!action) return;
+      if (action.mode === "create") {
+        toCreate.push({
+          type: "expense", categoryId, subId, description: vehicle.name,
+          amount: installmentValue, vehicleId: vehicle.id, month: slot.month,
+          dueDay: Math.min(31, Math.max(1, Number(dueDay) || 10)), paid: false,
+          installmentNumber: slot.number, installmentTotal: totalInstallments,
+          recurringGroupId: groupId, year: currentYear,
+        });
+      } else if (action.mode === "link" && action.txId) {
+        toLink.push({ id: action.txId, patch: {
+          vehicleId: vehicle.id, installmentNumber: slot.number,
+          installmentTotal: totalInstallments, recurringGroupId: groupId,
+        }});
+      }
+    });
+    onConfirm({ toCreate, toLink });
+  };
+
+  return (
+    <Modal title={`Parcelas em aberto · ${vehicle.name}`} onClose={onClose} wide closeOnBackdrop={false}>
+      {!openCount ? (
+        <EmptyState icon={Check} title="Nenhuma parcela em aberto" desc={`Este financiamento está com ${paidInstallments} de ${totalInstallments} parcelas pagas.`} />
+      ) : (
+        <div className="space-y-3.5">
+          <div className="text-[12.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: "#6B4E12", fontFamily: "Inter, sans-serif" }}>
+            <b>{openCount}</b> parcela{openCount === 1 ? "" : "s"} em aberto de {brl(installmentValue)}
+            {slots.length < openCount && <> · só as <b>{slots.length}</b> que cabem em {currentYear} aparecem aqui; as demais entram no ano seguinte.</>}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Mês da próxima parcela">
+              <select value={startMonth} onChange={(e) => setStartMonth(Number(e.target.value))} className={inputCls} style={inputStyle}>
+                {MONTHS_FULL.map((m, i) => <option key={m} value={i}>{m}</option>)}
+              </select>
+            </Field>
+            <Field label="Dia de vencimento">
+              <input type="number" min="1" max="31" value={dueDay} onChange={(e) => setDueDay(e.target.value)} className={inputCls} style={inputStyle} />
+            </Field>
+            <Field label="Categoria">
+              <select value={categoryId} onChange={(e) => { setCategoryId(e.target.value); const c = categories.expense.find((x) => x.id === e.target.value); setSubId(c?.subs[0]?.id || ""); }} className={inputCls} style={inputStyle}>
+                {categories.expense.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Subcategoria">
+              <select value={subId} onChange={(e) => setSubId(e.target.value)} className={inputCls} style={inputStyle}>
+                {(activeCat?.subs || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </Field>
+          </div>
+
+          <div className="space-y-2">
+            {slots.map((slot) => {
+              const action = actions[slot.number] || { mode: "create", txId: "" };
+              const takenIds = new Set(slots.filter((s) => s.number !== slot.number && actions[s.number]?.mode === "link").map((s) => actions[s.number].txId).filter(Boolean));
+              const candidates = candidatesFor(slot.month).filter((t) => !takenIds.has(t.id));
+              return (
+                <div key={slot.number} className="px-3 py-2.5 rounded-lg" style={{ border: `1px solid ${LINE}`, background: PAPER }}>
+                  <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                    <div className="text-[12.5px] font-medium" style={{ color: INK }}>
+                      Parcela {slot.number}/{totalInstallments} <span style={{ color: SLATE }}>· {MONTHS_FULL[slot.month]}</span>
+                    </div>
+                    <div className="text-[12.5px]" style={{ fontFamily: "'JetBrains Mono', monospace", color: SLATE }}>{brl(installmentValue)}</div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <select value={action.mode} onChange={(e) => setMode(slot.number, e.target.value)} className={inputCls} style={inputStyle}>
+                      <option value="create">Gerar lançamento novo</option>
+                      <option value="link" disabled={!candidates.length}>Vincular a um lançamento existente{!candidates.length ? " (nenhum neste mês)" : ""}</option>
+                      <option value="skip">Ignorar por enquanto</option>
+                    </select>
+                    {action.mode === "link" && (
+                      <select value={action.txId} onChange={(e) => setTx(slot.number, e.target.value)} className={inputCls} style={inputStyle}>
+                        <option value="">Escolha o lançamento…</option>
+                        {candidates.map((t) => <option key={t.id} value={t.id}>{t.description} — {brl(t.amount)}</option>)}
+                      </select>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="text-[11.5px]" style={{ color: SLATE, fontFamily: "Inter, sans-serif" }}>
+            Vincular não altera a categoria nem o valor do lançamento que já existe — só o amarra
+            a esta parcela do financiamento.
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
+            <button onClick={confirm} disabled={!createCount && !linkCount} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">
+              {createCount ? `Gerar ${createCount}` : ""}{createCount && linkCount ? " · " : ""}{linkCount ? `Vincular ${linkCount}` : ""}
+              {!createCount && !linkCount ? "Nada selecionado" : ""}
+            </button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
