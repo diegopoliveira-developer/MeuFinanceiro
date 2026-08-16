@@ -185,6 +185,12 @@ Só necessário se você quiser usar a importação simples via CSV (aba "Conex�
 5. Copie a URL gerada (termina em `/exec`) e cole no app, aba "Conexão Google Sheets", campo "URL do Apps Script Web App".
 6. Clique em "Sincronizar agora" uma vez para o primeiro alinhamento. A partir daí, tudo que você criar/editar/excluir no app é enviado automaticamente.
 
+## Aba Cartões
+
+Uma tela por cartão e por mês: total da fatura, quantas compras e o ticket médio, quanto do limite já foi usado, gráfico da fatura mês a mês no ano, composição por categoria e a lista das compras.
+
+O agrupamento respeita o **ciclo real do cartão**, não o mês do lançamento: com fechamento no dia 15, uma compra feita no dia 20 de agosto entra na fatura de **setembro**. Por isso a tela mostra o período que cada fatura cobre (ex.: "compras de 16/08 a 15/09") e marca o dia com o mês quando a compra veio do mês anterior.
+
 ## Vencimentos, dias úteis e feriados
 
 Um lançamento só é marcado como **vencido a partir do dia seguinte** ao vencimento — nunca no próprio dia. E vencimento que cai em sábado, domingo ou feriado passa a valer no próximo dia útil (o app mostra um `*` ao lado do dia, e o motivo aparece ao passar o mouse).

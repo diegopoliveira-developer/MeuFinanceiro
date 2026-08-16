@@ -415,6 +415,33 @@ está pago não precisa de conciliação.
 
 ---
 
+## 2026-08-16 · Logotipo em imagem substitui a marca desenhada em SVG
+
+**Decisão**: o logotipo passou a ser a imagem oficial do usuário (marca + palavra
+"MeuFinanceiro"), no lugar do SVG anterior (moeda dourada com um "M"). Onde a imagem entra, o
+texto "MeuFinanceiro" que ficava ao lado **sai** — a imagem já traz o nome. Sobre fundo
+escuro ela é apoiada numa placa clara. O favicon é a **marca recortada** do logotipo, não o
+logotipo inteiro.
+
+**Motivo**: identidade visual definida pelo usuário. O recorte para o favicon é necessário
+porque o logotipo é 5,4:1 de proporção — espremido num quadrado de 64px, viraria um borrão.
+A placa clara resolve um problema medido: sobre o `INK`, partes do logotipo ficam em ~1,2:1 de
+contraste (ver `Conhecimento.md`).
+
+**Alternativas rejeitadas**: usar o PNG de 2172×724 e 724 KB como está (é ~14× maior que a
+maior exibição na tela, e serviria 724 KB a cada visita); aplicar filtro CSS para clarear o
+logotipo no fundo escuro (distorce as cores da marca); usar o logotipo inteiro como favicon
+(ilegível em 64px).
+
+**Consequência**: três arquivos derivados vivem em `public/` — `favicon.png` (64×64),
+`apple-touch-icon.png` (180×180) e `images/logo-meufinanceiro.png` (640 px de largura, 150 KB,
+com a margem transparente aparada). O **original em alta resolução foi preservado** em
+`src/assets/logo-meufinanceiro-original.png`, que não vai para o site; é dele que qualquer
+tamanho novo deve ser regerado, nunca dos derivados. O arquivo entregue em `dist/` não podia
+ficar lá: a build esvazia essa pasta.
+
+---
+
 ## 2026-08-15 · Adoção do padrão de contexto do `Basic AI Project Rules.md`
 
 **Decisão**: o antigo `Contextos/CONTEXT.md` — arquivo único que acumulava escopo, arquitetura,

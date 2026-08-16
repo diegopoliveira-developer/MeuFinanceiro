@@ -433,3 +433,108 @@ avisos do React.
 
 README atualizado com a seção de conciliação, incluindo o aviso explícito de que
 a comparação é só por valor e pode trocar contas de mesmo valor no mesmo mês.
+
+================================================================================
+DATA: 2026-08-16 02:35:12
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Na pasta dist/assets/images/ tem o arquivo logo-meufinanceiro.png, quero que
+substitua o logo texto por esse, e crie um favicon com o logotipo deste logo para
+a página. Também substitua na tela de login. Adicione no TODO criação do modo
+noturno, com seletor para o usuário escolher e ficar registrado na planilha.
+
+Agente:
+Logotipo aplicado nos três lugares (barra lateral, barra superior do mobile e
+tela de login), com o texto "MeuFinanceiro" que ficava ao lado removido — a
+imagem já traz o nome. Favicon e apple-touch-icon criados a partir da MARCA
+recortada do logotipo (o logotipo inteiro tem proporção 5,4:1 e viraria um borrão
+espremido num quadrado).
+
+Três coisas foram encontradas no caminho e tratadas:
+
+1. O arquivo estava em dist/, que a build ESVAZIA — ele seria apagado no próximo
+npm run build, e o dist/ nem é versionado. Movido para o código-fonte:
+public/images/ para o que o site serve, e o original em alta resolução preservado
+em src/assets/logo-meufinanceiro-original.png (essa pasta não vai para produção).
+
+2. O logotipo é feito para fundo claro. Medido contra o fundo azul-marinho do app:
+os 10% de pixels mais escuros dão 1,18:1 de contraste e a mediana da marca 2,08:1
+— abaixo do mínimo de 3:1 da WCAG; o "Meu" azul-escuro praticamente sumiria.
+Sobre fundo claro o mesmo arquivo dá ~13:1. Resolvido apoiando o logotipo numa
+placa clara (PARCHMENT arredondado) nos três lugares, o que preserva as cores da
+marca — em vez de filtro CSS, que as distorceria.
+
+3. O arquivo tem 2172x724 e 724 KB, cerca de 14x maior que a maior exibição na
+tela. Gerada uma versão aparada e reduzida (640 px, 150 KB) para o site.
+
+Sem ImageMagick nem biblioteca de imagem no ambiente, o recorte e o
+redimensionamento foram feitos com um utilitário em Node puro usando só o zlib
+nativo (decodifica o PNG, desfaz os filtros de scanline, processa e recodifica
+com CRC32). A posição da marca dentro do logotipo foi detectada contando pixels
+com alfa alto por coluna até achar o vão para o texto, em vez de estimar
+coordenadas no olho. O redimensionamento usa alfa pré-multiplicado, senão as
+bordas transparentes puxariam a cor para preto.
+
+Verificado no navegador: as três imagens respondem 200, o logotipo carrega
+(640x119 naturais, exibido a 247x46 no login), a placa cabe na barra lateral de
+236 px sem transbordar, e em viewport de 375 px a barra superior fica em 132x32
+sem rolagem horizontal. Build limpo. A captura de tela não estava disponível
+nesta sessão, então o contraste foi verificado por medição numérica e a geometria
+por medição do DOM — não por inspeção visual.
+
+Modo noturno acrescentado ao TODO, com os pontos que decidem o tamanho do
+trabalho: hoje as cores são constantes de JavaScript aplicadas por estilo inline
+espalhadas pelo App.jsx, e um tema escuro de verdade exige convertê-las em
+variáveis CSS ou contexto de tema — esse é o grosso do esforço. Também
+registrados: as três opções esperadas no seletor (Claro/Escuro/Seguir o sistema),
+a persistência em localStorage mais aba Config da planilha, a necessidade de
+aplicar o tema antes da primeira pintura para a tela não piscar, o fato de o
+logotipo ser feito para fundo claro, e os gráficos do Recharts, que recebem cor
+por prop e não herdam tema.
+
+================================================================================
+DATA: 2026-08-16 03:29:41
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Faça agora o T4.
+
+Agente:
+T4 entregue: nova aba "Cartões", com seletor de cartão e de mês. Traz quatro
+KPIs (fatura do mês com o período de compras que ela cobre, número de compras e
+ticket médio, percentual do limite, disponível e média mensal do ano), barra de
+uso do limite com os selos de 80/90/100/acima, gráfico de barras da fatura mês a
+mês com o mês selecionado destacado, rosca de composição por categoria e a lista
+das compras da fatura.
+
+O risco que estava anotado na própria tarefa — a tela nova discordar do painel de
+faturas do Dashboard — foi eliminado na raiz em vez de evitado por disciplina:
+extraí cardInvoiceItems(), que passou a ser a única função que decide o que cai
+em cada fatura, e o cardInvoice() do Dashboard virou uma soma sobre ela. Não há
+mais dois filtros para manter em sincronia. Registrado em Convencoes.md como
+regra.
+
+Detalhes de interface que valem registro: a tela mostra explicitamente o período
+que a fatura cobre ("compras de 16/08 a 15/09"), o que torna visível por que uma
+compra de agosto caiu na fatura de setembro; e na lista, quando a compra vem do
+mês anterior, o dia aparece com o mês junto ("20/08").
+
+Testado na interface real: cartão com fechamento no dia 15 e duas compras feitas
+em agosto — a do dia 10 caiu na fatura de agosto (período 16/07 a 15/08) e a do
+dia 20 na de setembro (16/08 a 15/09); o painel do Dashboard mostrou exatamente
+os mesmos R$ 300 e R$ 450, confirmando que as duas telas concordam; uma compra de
+R$ 4.000 levou o selo a "80% do limite" com 86%; marcar essa compra como "não
+será pago" tirou-a da fatura por inteiro (R$ 4.300 para R$ 300, 86% para 6%),
+confirmando que a regra da T10 vale também aqui. Em viewport de 375 px não há
+rolagem horizontal na página, só dentro da tabela de compras. Estado vazio
+verificado antes de existir cartão. Console sem erros e sem avisos do React.
+
+Com isso, as 10 tarefas do pedido de 2026-08-15 estão concluídas. Seguem em
+aberto no TODO apenas itens menores derivados delas (T8b de feriados já feito,
+T9b sobre proteção na hospedagem, T9c sobre o token secreto, o agregado do card
+de financiamento em Parcelas & Recorrências) e o modo noturno pedido hoje.

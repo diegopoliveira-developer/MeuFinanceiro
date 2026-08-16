@@ -24,7 +24,7 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
 | 6º | **T2** — vincular parcelas em aberto do veículo | ✅ feito e testado |
 | — | **T7** — edição inline do valor | ✅ feito e testado |
 | 7º | **T5** — conciliação na importação de extrato | ✅ feito e testado |
-| 8º | **T4** — dashboard de cartões | ⏳ pendente. Maior de todos, tela nova inteira. |
+| 8º | **T4** — dashboard de cartões | ✅ feito e testado |
 | 9º | **T9** — senha sincronizada pela planilha | ✅ feito e testado (opção C, escolhida pelo usuário) |
 
 ### Tarefas
@@ -63,10 +63,21 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       soma as duas — em vez de trocar uma pela outra, que perderia a informação que já existia.
       **Testado**: tooltip com observações traz descrição + "Observações: …"; sem observações,
       traz só a descrição.
-- [ ] **T4 · Dashboard de cartões (tela nova).** Uma tela por cartão, com recorte mensal:
-      total de compras do mês, lista das compras, gráficos e comparativo entre meses. Usar o
-      ciclo real de fatura (`invoicePeriodFor`), não o mês bruto do lançamento — senão a tela
-      nova vai discordar do painel de faturas que já existe no Dashboard.
+- [x] **T4 · Dashboard de cartões (tela nova).** ✅ **2026-08-16.** Nova aba **Cartões**, com
+      seletor de cartão e de mês. Traz: 4 KPIs (fatura do mês com o período de compras que ela
+      cobre, nº de compras e ticket médio, % do limite, disponível e média mensal), barra de
+      uso do limite com os selos de 80/90/100/acima, gráfico de fatura mês a mês no ano (com o
+      mês selecionado destacado), rosca de composição por categoria e a lista das compras da
+      fatura.
+      O risco anotado aqui foi eliminado na raiz: `cardInvoiceItems()` virou a **única** função
+      que decide o que cai em cada fatura, e o painel do Dashboard passou a derivar dela — não
+      há como as duas telas discordarem.
+      **Testado**: cartão com fechamento no dia 15 e duas compras de agosto — a do dia 10 caiu
+      na fatura de agosto (período 16/07 a 15/08) e a do dia 20 na de setembro (16/08 a 15/09),
+      marcada como "20/08" na lista; o painel do Dashboard mostrou exatamente os mesmos
+      R$ 300 e R$ 450; uma compra de R$ 4.000 levou o selo a "80% do limite" (86%); e marcá-la
+      como "não será pago" tirou-a da fatura por inteiro (R$ 4.300 → R$ 300, 86% → 6%). Em
+      viewport de 375px não há rolagem horizontal na página — só dentro da tabela.
 - [x] **T5 · Conciliação do extrato com lançamentos existentes.** ✅ **2026-08-16.** A prévia da
       importação ganhou a coluna **"O que fazer"**: linha que bate em mês, tipo e valor com um
       lançamento pendente já cadastrado sugere "Marcar como pago: <descrição>" em vez de criar
@@ -153,6 +164,27 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
 ---
 
 ## Funcionalidades
+
+- [ ] **Modo noturno (tema escuro), com seletor para o usuário e preferência salva na
+      planilha.** Pedido em 2026-08-16.
+      Pontos a resolver antes de codar, porque decidem o tamanho do trabalho:
+      - **As cores hoje são constantes de JavaScript aplicadas por estilo inline** (`INK`,
+        `PARCHMENT`, `PAPER`, `LINE`, `SAGE`, `GOLD`, `RUST`, `SLATE`) — espalhadas por todo
+        o `App.jsx`. Um tema escuro de verdade exige trocá-las por variáveis CSS
+        (`var(--paper)`) ou por um contexto de tema; é uma mudança ampla e mecânica, e é o
+        grosso do esforço. Registrar a decisão em `Decisoes.md` antes.
+      - **Três opções no seletor**: Claro, Escuro e "Seguir o sistema"
+        (`prefers-color-scheme`) — a terceira é a que a maioria espera hoje.
+      - **Persistência**: `localStorage` para valer de imediato **e** aba `Config` da planilha
+        (mesma linha de chave/valor usada pelo ano corrente, credencial e feriados — não exige
+        aba nova nem republicar o Apps Script). Aplicar o tema salvo **antes da primeira
+        pintura**, senão a tela pisca claro e depois escurece.
+      - **O logotipo é feito para fundo claro** (medido: ~13:1 no claro, ~1,2:1 no escuro).
+        Hoje ele fica sobre uma placa clara; no tema escuro isso continua valendo, ou pede uma
+        versão do logo em cores claras. Ver `Contextos/Conhecimento.md`.
+      - **Rever os pares de cor de status** (Pago/Vencido/Vence em breve/Não será pago) e os
+        gráficos do Recharts, que recebem cor por prop e não herdam tema.
+      - Atualizar `<meta name="theme-color">` junto com o tema.
 
 - [ ] Navegação por anos arquivados no **Dashboard** e em **Parcelas & Recorrências** — hoje
       só Lançamentos e Relatório Anual acessam o histórico.

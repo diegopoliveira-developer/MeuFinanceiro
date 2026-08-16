@@ -399,13 +399,26 @@ function seedTransactions() {
    LOGOTIPO — monograma "M" em formato de gráfico ascendente sobre moeda,
    nas cores do sistema (tinta + dourado)
    ========================================================================= */
-function Logo({ size = 32 }) {
+/* Logotipo oficial: a imagem já traz a marca E a palavra "MeuFinanceiro", então onde ela
+   entra o texto ao lado sai — repetir o nome ao lado do logotipo seria redundante.
+   O arquivo vive em public/images/ e é servido pela raiz do site; a altura é o que se
+   controla, a largura acompanha a proporção. */
+function Logo({ height = 30, onDark = false, style }) {
+  const img = (
+    <img
+      src="/images/logo-meufinanceiro.png"
+      alt="MeuFinanceiro"
+      style={{ height, width: "auto", display: "block", ...style }}
+    />
+  );
+  if (!onDark) return img;
+  // O logotipo é desenhado para fundo claro. Sobre o azul-marinho do app, o "Meu" e metade da
+  // marca ficam em ~1,2:1 de contraste — na prática, invisíveis. A placa clara devolve os
+  // ~13:1 do material original sem mexer nas cores da marca.
   return (
-    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="MeuFinanceiro">
-      <circle cx="20" cy="20" r="19" fill={GOLD} stroke="#8C6A1B" strokeWidth="1" />
-      <circle cx="20" cy="20" r="14.5" fill="none" stroke="#8C6A1B" strokeWidth="1" opacity="0.35" />
-      <path d="M10 26 L10 15 L15 22 L20 13 L25 22 L30 15 L30 26" stroke={INK} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    </svg>
+    <span style={{ display: "inline-block", background: PARCHMENT, borderRadius: 9, padding: `${Math.round(height * 0.24)}px ${Math.round(height * 0.32)}px`, lineHeight: 0 }}>
+      {img}
+    </span>
   );
 }
 
@@ -858,15 +871,16 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     }
     return { month: t.month, year: t.year || currentYear };
   };
-  const cardInvoice = (cardId, m, y) => {
+  // As compras que compõem a fatura de um mês. O total sai daqui, para o painel do Dashboard e
+  // a tela de Cartões nunca discordarem: um único critério de "o que cai nesta fatura".
+  const cardInvoiceItems = (cardId, m, y) => {
     const card = cards.find((c) => c.id === cardId);
     const year = y ?? currentYear;
-    if (!card) return activeTransactions.filter((t) => t.cardId === cardId && t.month === m).reduce((s, t) => s + Number(t.amount || 0), 0);
-    return activeTransactions
-      .filter((t) => t.cardId === cardId)
-      .filter((t) => { const p = invoicePeriodFor(card, t); return p.month === m && p.year === year; })
-      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    const ofCard = activeTransactions.filter((t) => t.cardId === cardId);
+    if (!card) return ofCard.filter((t) => t.month === m);
+    return ofCard.filter((t) => { const p = invoicePeriodFor(card, t); return p.month === m && p.year === year; });
   };
+  const cardInvoice = (cardId, m, y) => cardInvoiceItems(cardId, m, y).reduce((s, t) => s + Number(t.amount || 0), 0);
 
   const pendingBadgeCount = useMemo(
     () => activeTransactions.filter((t) => !t.paid && (paymentStatus(t) === "overdue" || paymentStatus(t) === "soon")).length,
@@ -1250,11 +1264,10 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
           className={`fixed lg:sticky top-0 left-0 z-50 h-screen transition-transform duration-200 ease-out ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
           style={{ width: 236, background: INK, alignSelf: "flex-start", paddingTop: 18, display: "flex", flexDirection: "column" }}
         >
-          <div className="px-5 pb-6 flex items-center gap-2.5">
-            <Logo size={34} />
+          <div className="px-5 pb-6 flex items-start gap-2.5">
             <div className="flex-1 min-w-0">
-              <div style={{ fontFamily: "'Fraunces', serif", fontSize: 15, fontWeight: 600, color: "#fff" }}>MeuFinanceiro</div>
-              <div style={{ fontSize: 10.5, color: "#8B95A8", letterSpacing: "0.06em" }}>CONTROLE FAMILIAR · {currentYear}</div>
+              <Logo height={30} onDark />
+              <div style={{ fontSize: 10.5, color: "#8B95A8", letterSpacing: "0.06em", marginTop: 7 }}>CONTROLE FAMILIAR · {currentYear}</div>
             </div>
             <button onClick={() => setSidebarOpen(false)} className="lg:hidden p-1.5 rounded-md flex-shrink-0" style={{ color: "#C7CEDA" }}><X size={18} /></button>
           </div>
@@ -1262,6 +1275,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
             <LedgerTab icon={PieIcon} label="Dashboard" active={tab === "dashboard"} onClick={() => { setTab("dashboard"); setSidebarOpen(false); }} />
             <LedgerTab icon={Calendar} label="Lançamentos" active={tab === "lancamentos"} onClick={() => { setTab("lancamentos"); setSidebarOpen(false); }} badge={pendingBadgeCount} />
             <LedgerTab icon={Layers} label="Parcelas & Recorrências" active={tab === "recorrencias"} onClick={() => { setTab("recorrencias"); setSidebarOpen(false); }} badge={recurrenceBadgeCount} />
+            <LedgerTab icon={CreditCard} label="Cartões" active={tab === "cartoes"} onClick={() => { setTab("cartoes"); setSidebarOpen(false); }} />
             <LedgerTab icon={Settings2} label="Categorias" active={tab === "categorias"} onClick={() => { setTab("categorias"); setSidebarOpen(false); }} />
             <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => { setTab("conexao"); setSidebarOpen(false); }} />
             <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => { setTab("relatorio"); setSidebarOpen(false); }} />
@@ -1291,8 +1305,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
           {/* Barra superior — só aparece em telas menores que o breakpoint lg */}
           <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3" style={{ background: INK, borderBottom: `1px solid rgba(255,255,255,0.08)` }}>
             <button onClick={() => setSidebarOpen(true)} className="p-1.5 rounded-md flex-shrink-0" style={{ color: "#fff" }} aria-label="Abrir menu"><Menu size={20} /></button>
-            <Logo size={24} />
-            <span className="truncate" style={{ fontFamily: "'Fraunces', serif", fontSize: 14, fontWeight: 600, color: "#fff" }}>MeuFinanceiro</span>
+            <Logo height={22} onDark />
           </div>
 
           <div className="px-4 sm:px-6 lg:px-8 py-5 lg:py-8 max-w-full overflow-x-hidden">
@@ -1322,6 +1335,12 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               transactions={transactions} catById={catById} subById={subById} cards={cards} vehicles={vehicles}
               togglePaid={togglePaid} endRecurrence={endRecurrence} changeRecurrenceAmount={changeRecurrenceAmount}
               setTab={setTab} setSelectedMonth={setSelectedMonth} currentYear={currentYear}
+            />
+          )}
+          {tab === "cartoes" && (
+            <CartoesTab
+              cards={cards} cardInvoiceItems={cardInvoiceItems} catById={catById} subById={subById}
+              selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentYear={currentYear}
             />
           )}
           {tab === "categorias" && (
@@ -1449,9 +1468,8 @@ function LoginScreen({ onSuccess, authConfig, onAttempt }) {
       `}</style>
       <div className="w-full" style={{ maxWidth: 380 }}>
         <div className="flex flex-col items-center mb-6">
-          <Logo size={48} />
-          <div className="mt-3 text-[19px] font-semibold" style={{ fontFamily: "'Fraunces', serif", color: "#fff" }}>MeuFinanceiro</div>
-          <div className="text-[12px] mt-1" style={{ color: "#8B95A8" }}>Controle financeiro familiar</div>
+          <Logo height={46} onDark />
+          <div className="text-[12px] mt-2.5" style={{ color: "#8B95A8" }}>Controle financeiro familiar</div>
         </div>
 
         <form onSubmit={submit} className="rounded-xl p-6" style={{ background: PARCHMENT, border: `1px solid ${LINE}` }}>
@@ -3142,6 +3160,215 @@ function CategoryColumn({ title, type, list, addCategory, deleteCategory, addSub
         <input value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder={`Nova categoria de ${type === "income" ? "receita" : "despesa"}`} className={inputCls} style={inputStyle}
           onKeyDown={(e) => { if (e.key === "Enter" && newCat.trim()) { addCategory(type, newCat.trim()); setNewCat(""); } }} />
         <button onClick={() => { if (newCat.trim()) { addCategory(type, newCat.trim()); setNewCat(""); } }} className="btn-primary px-3 rounded-md"><Plus size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   TAB: CARTÕES
+   -------------------------------------------------------------------------
+   Uma fatura por vez: escolhe-se o cartão e o mês. Tudo aqui parte de
+   `cardInvoiceItems`, a mesma função que alimenta o painel de faturas do
+   Dashboard — o agrupamento é pelo CICLO REAL (dia de fechamento), não pelo
+   mês bruto do lançamento, senão as duas telas mostrariam números diferentes
+   para a mesma fatura.
+   ========================================================================= */
+const invoiceTierMeta = {
+  ok: null,
+  warn: { label: "80% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+  high: { label: "90% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+  full: { label: "Limite atingido", color: RUST, bg: RUST_SOFT },
+  over: { label: "Limite excedido", color: "#fff", bg: RUST },
+};
+const invoiceTier = (pct) => (pct > 100 ? "over" : pct >= 100 ? "full" : pct >= 90 ? "high" : pct >= 80 ? "warn" : "ok");
+
+function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, setSelectedMonth, currentYear }) {
+  const [cardId, setCardId] = useState(cards[0]?.id || "");
+  const card = cards.find((c) => c.id === cardId) || cards[0];
+
+  const items = useMemo(() => (card ? cardInvoiceItems(card.id, selectedMonth, currentYear) : []), [card, cardInvoiceItems, selectedMonth, currentYear]);
+  const total = items.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const pct = card?.limit ? (total / card.limit) * 100 : 0;
+  const tier = invoiceTierMeta[invoiceTier(pct)];
+
+  // Fatura de cada mês do ano, para o gráfico de evolução.
+  const porMes = useMemo(() => (card ? MONTHS.map((label, i) => ({
+    month: label,
+    Fatura: Math.round(cardInvoiceItems(card.id, i, currentYear).reduce((s, t) => s + Number(t.amount || 0), 0)),
+  })) : []), [card, cardInvoiceItems, currentYear]);
+
+  const mesesComFatura = porMes.filter((m) => m.Fatura > 0);
+  const media = mesesComFatura.length ? mesesComFatura.reduce((s, m) => s + m.Fatura, 0) / mesesComFatura.length : 0;
+
+  const porCategoria = useMemo(() => {
+    const map = {};
+    items.forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + Number(t.amount || 0); });
+    return Object.entries(map)
+      .map(([id, value]) => ({ id, name: catById(id)?.name || id, value: Math.round(value), color: catById(id)?.color || SLATE }))
+      .sort((a, b) => b.value - a.value);
+  }, [items, catById]);
+
+  // Período de compras que a fatura cobre: do dia seguinte ao fechamento do mês anterior até o
+  // fechamento deste mês. É o que torna visível por que uma compra "de julho" caiu em agosto.
+  const periodo = card ? (() => {
+    const dd = (n) => String(n).padStart(2, "0");
+    const mesAnterior = selectedMonth === 0 ? 11 : selectedMonth - 1;
+    return `${dd(Math.min(31, card.closingDay + 1))}/${dd(mesAnterior + 1)} a ${dd(card.closingDay)}/${dd(selectedMonth + 1)}`;
+  })() : "";
+
+  if (!cards.length) {
+    return (
+      <div className="fade-up">
+        <header className="mb-6">
+          <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Cartões</h1>
+          <p className="text-[13px] mt-1" style={{ color: SLATE }}>Faturas mês a mês, com as compras de cada cartão.</p>
+        </header>
+        <div className="ledger-card" style={{ background: PAPER }}>
+          <EmptyState icon={CreditCard} title="Nenhum cartão cadastrado" desc="Cadastre seus cartões na aba Categorias & Módulos para acompanhar as faturas aqui." />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade-up">
+      <header className="mb-5">
+        <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600 }}>Cartões</h1>
+        <p className="text-[13px] mt-1" style={{ color: SLATE }}>Faturas mês a mês, com as compras de cada cartão.</p>
+      </header>
+
+      {/* Seletor de cartão */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        {cards.map((c) => {
+          const ativo = c.id === card.id;
+          return (
+            <button key={c.id} onClick={() => setCardId(c.id)}
+              className="chip flex items-center gap-2 px-3.5 py-2 rounded-full text-[12.5px] font-medium"
+              style={{ background: ativo ? INK : PAPER, color: ativo ? "#fff" : INK, border: `1px solid ${ativo ? INK : LINE}` }}>
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color || SLATE, flexShrink: 0 }} />
+              {c.name}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Seletor de mês */}
+      <div className="flex flex-wrap gap-1.5 mb-5">
+        {MONTHS.map((m, i) => (
+          <button key={m} onClick={() => setSelectedMonth(i)} className="chip px-3 py-1.5 rounded-full text-[12.5px] font-medium whitespace-nowrap"
+            style={{ background: selectedMonth === i ? INK : PAPER, color: selectedMonth === i ? "#fff" : INK, border: `1px solid ${selectedMonth === i ? INK : LINE}` }}>
+            {m}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+        <KpiCard label={`Fatura de ${MONTHS_FULL[selectedMonth]}`} value={brl(total)} sub={`compras de ${periodo}`} icon={CreditCard} tone="ink" />
+        <KpiCard label="Compras na fatura" value={String(items.length)} sub={items.length ? `ticket médio ${brl(total / items.length)}` : "nenhuma compra"} icon={ListOrdered} tone="sage" />
+        <KpiCard label="Limite utilizado" value={card.limit ? `${pct.toFixed(0)}%` : "—"} sub={card.limit ? `de ${brl(card.limit)}` : "limite não informado"} icon={Target} tone={pct >= 90 ? "rust" : "gold"} />
+        <KpiCard label="Disponível" value={card.limit ? brl(Math.max(0, card.limit - total)) : "—"} sub={media ? `média mensal ${brl(media)}` : "sem histórico no ano"} icon={Wallet} tone="sage" />
+      </div>
+
+      <div className="ledger-card mb-4" style={{ background: PAPER }}>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: card.color || SLATE }} />
+            <h3 className="text-[13.5px] font-semibold">{card.name}</h3>
+          </div>
+          <div className="text-[11.5px]" style={{ color: SLATE }}>
+            fecha dia {card.closingDay} · vence dia {card.dueDay}
+            {tier && <span className="ml-2 px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: tier.bg, color: tier.color }}>{tier.label}</span>}
+          </div>
+        </div>
+        {card.limit ? (
+          <div className="h-2 rounded-full" style={{ background: "#EEE7D4" }}>
+            <div className="h-2 rounded-full" style={{ width: `${Math.min(100, pct)}%`, background: pct >= 100 ? RUST : pct >= 80 ? GOLD : SAGE }} />
+          </div>
+        ) : (
+          <p className="text-[11.5px]" style={{ color: SLATE }}>Informe o limite do cartão em Categorias & Módulos para acompanhar o quanto já foi usado.</p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-4">
+        <div className="lg:col-span-3 ledger-card" style={{ background: PAPER }}>
+          <div className="flex items-center gap-2 mb-1"><TrendingUp size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Fatura mês a mês — {currentYear}</h3></div>
+          <p className="text-[11.5px] mb-3" style={{ color: SLATE }}>Cada barra é a fatura fechada daquele mês, pelo ciclo real do cartão.</p>
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={porMes} barGap={4}>
+              <CartesianGrid strokeDasharray="3 3" stroke={LINE} vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={{ stroke: LINE }} tickLine={false} />
+              <YAxis tickFormatter={brlCompact} tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={false} tickLine={false} width={44} />
+              <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+              <Bar dataKey="Fatura" radius={[3, 3, 0, 0]}>
+                {porMes.map((m, i) => <Cell key={i} fill={i === selectedMonth ? (card.color || INK) : "#D8D0BC"} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="lg:col-span-2 ledger-card" style={{ background: PAPER }}>
+          <div className="flex items-center gap-2 mb-1"><PieIcon size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Por categoria</h3></div>
+          <p className="text-[11.5px] mb-3" style={{ color: SLATE }}>Composição da fatura de {MONTHS_FULL[selectedMonth]}</p>
+          {porCategoria.length ? (
+            <>
+              <ResponsiveContainer width="100%" height={190}>
+                <PieChart>
+                  <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
+                    {porCategoria.map((e, i) => <Cell key={i} fill={e.color} stroke={PAPER} strokeWidth={2} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-1 mt-1">
+                {porCategoria.slice(0, 5).map((e) => (
+                  <div key={e.id} className="flex items-center justify-between text-[11.5px]" style={{ color: SLATE }}>
+                    <span className="flex items-center gap-1.5 min-w-0"><span style={{ width: 8, height: 8, borderRadius: 2, background: e.color, flexShrink: 0 }} /><span className="truncate">{e.name}</span></span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{brl(e.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : <EmptyState icon={PieIcon} title="Fatura vazia" desc="Nenhuma compra neste cartão no período." />}
+        </div>
+      </div>
+
+      <div className="ledger-card" style={{ background: PAPER }}>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-2"><ListOrdered size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Compras da fatura de {MONTHS_FULL[selectedMonth]}</h3></div>
+          <span className="text-[12px]" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>{brl(total)}</span>
+        </div>
+        {items.length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table className="w-full text-[12.5px]" style={{ minWidth: 460 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${LINE}` }}>
+                  <th className="text-left font-semibold px-2 py-2" style={{ color: SLATE }}>Compra</th>
+                  <th className="text-left font-semibold px-2 py-2" style={{ color: SLATE }}>Categoria</th>
+                  <th className="text-center font-semibold px-2 py-2" style={{ color: SLATE }}>Dia</th>
+                  <th className="text-right font-semibold px-2 py-2" style={{ color: SLATE }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...items].sort((a, b) => (a.dueDay || 0) - (b.dueDay || 0)).map((t) => (
+                  <tr key={t.id} style={{ borderBottom: `1px solid ${LINE}` }}>
+                    <td className="px-2 py-2">
+                      <div className="font-medium truncate max-w-[230px]" title={t.notes ? `${t.description}\n\nObservações: ${t.notes}` : t.description}>{t.description}</div>
+                      {t.installmentTotal ? (
+                        <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+                          <ListOrdered size={10} /> Parcela {t.installmentNumber}/{t.installmentTotal}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap" style={{ color: SLATE }}>{catById(t.categoryId)?.name} <span className="opacity-60">› {subById(t.categoryId, t.subId)?.name}</span></td>
+                    <td className="px-2 py-2 text-center whitespace-nowrap" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>{t.dueDay}{t.month !== selectedMonth ? `/${String(t.month + 1).padStart(2, "0")}` : ""}</td>
+                    <td className="px-2 py-2 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: RUST }}>{brl(t.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <EmptyState icon={CreditCard} title="Nenhuma compra nesta fatura" desc={`Lance uma despesa com este cartão vinculado para vê-la aqui. A fatura cobre as compras de ${periodo}.`} />}
       </div>
     </div>
   );

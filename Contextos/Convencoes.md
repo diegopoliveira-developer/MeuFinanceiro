@@ -42,6 +42,10 @@ main.jsx            monta <App /> em #root, dentro de <React.StrictMode>
   sem registrar a decisão em [`Decisoes.md`](Decisoes.md).
 - **Toda mutação de domínio nasce no `Dashboard`.** Uma aba nunca escreve estado direto:
   chama o callback que o `Dashboard` passou.
+- **O que compõe a fatura de um cartão se decide só em `cardInvoiceItems()`.** Duas telas
+  mostram fatura hoje (o painel do Dashboard e a aba Cartões) e ambas derivam dessa função;
+  refazer o filtro por fora significa, mais cedo ou mais tarde, as duas discordarem do mesmo
+  número. O agrupamento é pelo **ciclo real** (dia de fechamento), nunca pelo mês do lançamento.
 - **Toda soma financeira parte de `activeTransactions`, nunca de `transactions`.** O segundo
   inclui os lançamentos marcados como "não será pago", que existem para aparecer na lista e
   ficar fora de KPI, gráfico, subtotal, orçamento, fatura, relatório e contagem de pendência.
@@ -65,10 +69,17 @@ main.jsx            monta <App /> em #root, dentro de <React.StrictMode>
 ```
 MeuFinanceiro/
 ├── src/                 ← ÚNICA pasta de código-fonte editável
-│   ├── App.jsx            todo o app (~3.370 linhas): tokens, helpers, auth, abas, modais
+│   ├── App.jsx            todo o app: tokens, helpers, auth, abas, modais
 │   ├── main.jsx           ponto de entrada React
-│   └── index.css          diretivas do Tailwind
+│   ├── index.css          diretivas do Tailwind
+│   └── assets/            originais de imagem em alta resolução; NÃO vão para o site
+│                          (o Vite só embala o que é importado por código)
+├── public/              ← copiada INTEIRA para dist/ na build, servida a partir da raiz
+│   ├── favicon.png          ícone da aba (64×64)
+│   ├── apple-touch-icon.png ícone de atalho no iOS (180×180)
+│   └── images/              imagens referenciadas por caminho absoluto (/images/…)
 ├── dist/                ← ARTEFATO GERADO por `npm run build`. Nunca editar à mão.
+│                          A build ESVAZIA esta pasta: nada colocado aqui sobrevive.
 ├── Contextos/           documentação normativa (este arquivo e os irmãos)
 │   └── Historico/        material arquivado — não normativo, não ler por padrão
 ├── Notas/               backlog técnico (TODO.md)

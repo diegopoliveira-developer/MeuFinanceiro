@@ -182,6 +182,41 @@ próximo `npm install` a apaga em silêncio. Auditoria atual: 3 vulnerabilidades
 `nanoid` se resolve com `npm audit fix` (sem quebra), a do `esbuild`/`vite` só com o salto
 para o Vite 8.
 
+### Arquivo colocado em `dist/` é apagado na build seguinte
+
+`vite build` **esvazia** o `dist/` antes de gerar. Uma imagem (ou qualquer outro arquivo)
+deixada lá se perde no próximo build — e o `dist/` também é ignorado pelo Git, então não há
+nem cópia no repositório. Aconteceu de verdade com o logotipo, entregue em
+`dist/assets/images/`.
+
+**Onde colocar**: `public/` para o que o site precisa servir por caminho fixo (`/favicon.png`,
+`/images/…`) — essa pasta é copiada inteira para o `dist/` na build; `src/assets/` para
+originais que não devem ir para produção (o Vite só embala o que é importado por código).
+
+### O logotipo é feito para fundo claro — sobre o azul-marinho ele some
+
+Medição do arquivo (proporção de contraste WCAG contra o fundo): **~13:1 sobre PARCHMENT ou
+branco**, mas **~1,2:1 sobre o `INK` (#101B2D)** nos 10% de pixels mais escuros — o "Meu"
+azul-escuro e metade da marca ficam praticamente invisíveis. A mediana da marca sobre o escuro
+dá 2,08:1, abaixo do mínimo de 3:1 da WCAG para elemento gráfico.
+
+**Solução**: o componente `Logo` aceita `onDark`, que o apoia numa placa clara (PARCHMENT
+arredondado). É usado nos três lugares com fundo escuro — barra lateral, barra superior do
+mobile e tela de login. **Não** aplicar filtro CSS para clarear: distorce as cores da marca.
+
+Vale para qualquer lugar novo que use o logotipo, e é um ponto a resolver no modo noturno.
+
+### Manipular PNG sem dependência: `zlib` do Node basta
+
+Não há ImageMagick nem biblioteca de imagem neste ambiente (atenção: `/c/WINDOWS/system32/
+convert` é a ferramenta de disco do Windows, não o ImageMagick). Para recortar/redimensionar
+PNG, dá para decodificar com `zlib.inflateSync`, desfazer os filtros de scanline, processar e
+recodificar com `zlib.deflateSync` + CRC32 — foi assim que o favicon e a versão reduzida do
+logotipo foram gerados. Dois cuidados: o redimensionamento precisa usar **alfa
+pré-multiplicado** (senão as bordas transparentes puxam a cor para preto e aparece uma franja
+escura), e a localização da marca dentro do logotipo sai de contar pixels com alfa alto por
+coluna, achando o vão até o texto — mais confiável que estimar coordenadas no olho.
+
 ### `.firebaserc` depende do projeto Firebase do usuário
 
 Não é gerado pelo repositório: nasce do `firebase use --add` na primeira vez. Contém o id do

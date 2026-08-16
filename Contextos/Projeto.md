@@ -80,7 +80,8 @@ como armazenamento persistente por trás.
 - Lançamento manual de receitas e despesas por mês (Janeiro–Dezembro) de um único ano corrente.
 - Categorias e subcategorias criadas/removidas pelo usuário em tempo de uso.
 - Lançamentos parcelados (N parcelas) e recorrentes (fixos mensais, com ou sem data de término).
-- Cartões de crédito com cálculo de fatura por ciclo real (dia de fechamento/vencimento).
+- Cartões de crédito com cálculo de fatura por ciclo real (dia de fechamento/vencimento), e
+  uma tela dedicada por cartão e por mês, com as compras da fatura e gráficos.
 - Financiamentos de veículos (valor total, parcelas totais/pagas).
 - Metas e orçamentos mensais por categoria de despesa.
 - Controle de vencimento e status de pagamento (Pago / Vencido / Vence em breve / Pendente).
@@ -149,8 +150,8 @@ string dentro desse mesmo arquivo, para o usuário copiar — não é executado 
 | Google Fonts | Fraunces (títulos), Inter (corpo), JetBrains Mono (valores) — carregadas por `@import` dentro de `<style>` injetado no componente. |
 
 **Superfície pública**: nenhuma API consumida por terceiros. O que é "público" é a interface:
-as 7 abas do app — Dashboard, Lançamentos, Parcelas & Recorrências, Categorias, Conexão Google
-Sheets, Relatório Anual, Diagnóstico de Segurança. O único contrato externo estável é o
+as 8 abas do app — Dashboard, Lançamentos, Parcelas & Recorrências, Cartões, Categorias,
+Conexão Google Sheets, Relatório Anual, Diagnóstico de Segurança. O único contrato externo estável é o
 **esquema de abas/colunas da planilha do Google** (`Lancamentos`, `Categorias`, `Config`,
 `Cartoes`, `Veiculos`, `Orcamentos`), documentado no `README.md` da raiz — mudar nome ou
 significado de coluna quebra a planilha de quem já usa.
