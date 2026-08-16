@@ -3,3 +3,8 @@ dist
 .DS_Store
 /.idea/meufinanceiro.iml
 /.idea/modules.xml
+
+# Firebase: .firebaserc guarda o ID do projeto Firebase (configuração da máquina,
+# criada pelo `firebase use --add`); .firebase/ é cache da CLI.
+.firebaserc
+.firebase/

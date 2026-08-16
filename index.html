@@ -7,6 +7,20 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#101B2D" />
     <title>MeuFinanceiro</title>
+    <script>
+      // Aplica o tema ANTES da primeira pintura. Se isto rodasse dentro do React (em efeito ou
+      // até no render), a página apareceria clara por um instante e escureceria em seguida.
+      // Bloco pequeno e síncrono de propósito.
+      (function () {
+        try {
+          var salvo = localStorage.getItem("meufinanceiro_theme_v1") || "system";
+          var escuro = salvo === "dark" || (salvo === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.setAttribute("data-theme", escuro ? "dark" : "light");
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

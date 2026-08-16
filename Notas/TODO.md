@@ -126,8 +126,12 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       emenda sábado 12/09 → domingo → feriado municipal na segunda 14/09 → terça 15/09;
       e o teste que importa — cadastrar um feriado em 14/08 mudou o status do lançamento de
       "Vencido" para "Vence em breve", e removê-lo devolveu para "Vencido".
-- [x] **T9 · Senha sincronizada pela planilha, com hash reforçado.** ✅ **2026-08-15**, na
-      opção C (recomendada), escolhida pelo usuário.
+- [x] **T9 · Senha com hash reforçado.** ✅ **2026-08-15** na opção C, e **revisto em
+      2026-08-16**: a sincronização pela planilha foi REMOVIDA quando a credencial padrão
+      passou a ser a senha forte definitiva do usuário, guardada só como hash no código-fonte.
+      O hash PBKDF2 continua; o que saiu foi o trânsito dele para a planilha. Ver
+      `Contextos/Decisoes.md`.
+      Registro do que a T9 original entregou:
       **Antes**: hash SHA-256 de `usuario:senha` só em `localStorage` — trocar de dispositivo
       ou limpar os dados devolvia a credencial ao padrão de fábrica.
       **Agora**: PBKDF2-HMAC-SHA256 com salt aleatório e 210.000 iterações, gravado no
@@ -141,14 +145,15 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       senha em texto puro**; simulando um segundo dispositivo (sem credencial local, com a
       mesma conexão), a credencial foi puxada no login, a senha antiga passou a ser rejeitada
       e a nova funcionou.
-- [ ] **T9b · Navegador novo ainda entra com a credencial de fábrica.** Limite conhecido do
-      desenho: sem conexão configurada, o app não tem como consultar a planilha antes do login,
-      então cai no `AUTH_CONFIG` do código. Só se resolve de verdade com proteção na
-      hospedagem (opção D: Vercel Password Protection, plano pago + migrar do Firebase) ou com
-      backend. **Decisão pendente do usuário.**
-- [ ] **T9c · Token secreto do Apps Script deixou de ser opcional na prática.** Agora que o
-      hash da senha fica na planilha, quem tiver só a URL consegue lê-lo. Confirmar que o token
-      está configurado nos dois lados (app e script).
+- [x] **T9b · "Credencial de fábrica" deixou de ser um problema.** ✅ **2026-08-16.** O padrão
+      do código passou a ser a senha forte definitiva do usuário — não existe mais uma senha
+      genérica que abra qualquer navegador novo. O limite que resta é outro e é do modelo, não
+      da credencial: quem tem o código pode pular a verificação pelo DevTools. Só proteção na
+      hospedagem ou backend resolvem isso. **Decisão pendente do usuário.**
+- [ ] **Token secreto do Apps Script — ainda vale configurar.** Deixou de ser crítico para a
+      senha (o hash não vai mais para a planilha), mas continua sendo o que impede quem
+      descobrir a URL de ler e gravar os seus dados financeiros. Confirmar que está configurado
+      nos dois lados (app e script).
 
 - [x] **T10 · Marcar lançamento como "não será pago" / ignorado.** ✅ **2026-08-15.** Botão de
       proibido (⊘) na linha alterna o estado; o lançamento fica riscado e esmaecido, com o
@@ -165,26 +170,29 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
 
 ## Funcionalidades
 
-- [ ] **Modo noturno (tema escuro), com seletor para o usuário e preferência salva na
-      planilha.** Pedido em 2026-08-16.
-      Pontos a resolver antes de codar, porque decidem o tamanho do trabalho:
-      - **As cores hoje são constantes de JavaScript aplicadas por estilo inline** (`INK`,
-        `PARCHMENT`, `PAPER`, `LINE`, `SAGE`, `GOLD`, `RUST`, `SLATE`) — espalhadas por todo
-        o `App.jsx`. Um tema escuro de verdade exige trocá-las por variáveis CSS
-        (`var(--paper)`) ou por um contexto de tema; é uma mudança ampla e mecânica, e é o
-        grosso do esforço. Registrar a decisão em `Decisoes.md` antes.
-      - **Três opções no seletor**: Claro, Escuro e "Seguir o sistema"
-        (`prefers-color-scheme`) — a terceira é a que a maioria espera hoje.
-      - **Persistência**: `localStorage` para valer de imediato **e** aba `Config` da planilha
-        (mesma linha de chave/valor usada pelo ano corrente, credencial e feriados — não exige
-        aba nova nem republicar o Apps Script). Aplicar o tema salvo **antes da primeira
-        pintura**, senão a tela pisca claro e depois escurece.
-      - **O logotipo é feito para fundo claro** (medido: ~13:1 no claro, ~1,2:1 no escuro).
-        Hoje ele fica sobre uma placa clara; no tema escuro isso continua valendo, ou pede uma
-        versão do logo em cores claras. Ver `Contextos/Conhecimento.md`.
-      - **Rever os pares de cor de status** (Pago/Vencido/Vence em breve/Não será pago) e os
-        gráficos do Recharts, que recebem cor por prop e não herdam tema.
-      - Atualizar `<meta name="theme-color">` junto com o tema.
+- [x] **Modo noturno (tema escuro), com seletor e preferência salva na planilha.** ✅
+      **2026-08-16.** Seletor de três opções (Claro / Escuro / Sistema) no rodapé da barra
+      lateral; preferência salva no `localStorage` **e** na aba `Config` da planilha, então
+      acompanha o usuário entre dispositivos.
+      Feito por **indireção em variáveis CSS**: os tokens do `App.jsx` deixaram de ser
+      hexadecimais e passaram a apontar para `var(--…)`, com as duas paletas em `index.css`.
+      Isso trocou 12 linhas em vez dos ~530 pontos que usam cor. Antes de adotar, foi
+      verificado no navegador que `var()` resolve dentro de atributo de apresentação do SVG —
+      é como o Recharts recebe cor.
+      **Testado**: "Sistema" resolve certo no carregamento nos dois esquemas; escolha explícita
+      vence o sistema e sobrevive à recarga (o `data-theme` é escrito por um script síncrono no
+      `index.html`, antes da primeira pintura, para a tela não piscar); a troca vai para a
+      planilha e volta dela (simulado outro dispositivo); o tema claro ficou **idêntico** aos
+      valores originais, sem regressão; no escuro o pior contraste de texto é 5,61:1 e as 8
+      abas passaram na varredura automática de contraste.
+      **Três defeitos encontrados e corrigidos no caminho**, todos por literal fixo em vez de
+      token: pílulas selecionadas com `color: "#fff"` sobre fundo que clareia no escuro; o selo
+      "Limite excedido"; e o tooltip do Recharts, que traz fundo branco próprio.
+- [ ] **Modo noturno — conferir a troca ao vivo na máquina real.** O listener de
+      `prefers-color-scheme` existe e a opção "Sistema" resolve certo em toda carga, mas o
+      evento `change` do `matchMedia` **não dispara na emulação** do navegador de teste
+      (confirmado com uma sonda própria: é limitação do ambiente, não do código). Só isso ficou
+      sem verificação.
 
 - [ ] Navegação por anos arquivados no **Dashboard** e em **Parcelas & Recorrências** — hoje
       só Lançamentos e Relatório Anual acessam o histórico.
@@ -231,22 +239,45 @@ Itens em desacordo com as regras ou decisões pendentes do usuário.
 Manter esta seção mesmo vazia — ela é o lugar de registrar dívida conhecida
 em vez de deixá-la implícita.
 
-- [ ] **Arquivo de versão não existe.** `Basic AI Project Rules.md` exige um `version.js` na
-      raiz, no formato `X.Y.Z` e com histórico (data · versão · descrição). Hoje a versão
-      (`1.0.0`) só existe no campo `version` do `package.json`. **Decisão pendente do
-      usuário**: criar o `version.js` com histórico e manter os dois em sincronia, ou registrar
-      em `Decisoes.md` que o `package.json` cumpre esse papel neste projeto.
-- [ ] **Cabeçalho obrigatório ausente em todo arquivo de código.** `src/App.jsx`,
-      `src/main.jsx`, `src/index.css` e os `*.config.js` não têm o bloco exigido por
-      `Contextos/Convencoes.md`, seção 4. Aplicar quando cada arquivo for tocado por outro
-      motivo; arquivo novo já nasce com ele.
-- [ ] **`.firebase/hosting.ZGlzdA.cache` está versionado.** É arquivo de cache, proibido pelo
-      `Basic AI Project Rules.md`. Remover do controle de versão (`git rm --cached`) e
-      acrescentar `.firebase/` ao `.gitignore` — **exige autorização**, é operação de Git.
-- [ ] **`.gitignore` não cobre `.firebaserc`**, que contém o id do projeto Firebase do usuário.
-      O arquivo ainda não existe localmente; acrescentar a regra antes que ele apareça.
-- [ ] **Credencial padrão (`familia` / `meufinanceiro`) está no código-fonte.** É padrão de
-      fábrica, com aviso na interface enquanto não for trocada. Confirmar com o usuário que já
-      foi alterada no navegador em uso.
-- [ ] **`CURRENT_MONTH_IDX` fixo em Julho** — o mês inicialmente selecionado não acompanha o
-      relógio. Confirmar com o usuário se é intencional; corrigir muda comportamento visível.
+- [x] **Arquivo de versão.** ✅ **2026-08-16.** O `version.js` foi criado pelo usuário e
+      preenchido com o histórico dos dois dias de trabalho: 12 entradas, de `1.0.0` (estado já
+      publicado antes deste ciclo) até `1.8.0` (modo noturno), seguindo a regra da norma —
+      `Z` para correção/ajuste, `Y` para funcionalidade nova.
+- [x] **`package.json` alinhado com o `version.js`.** ✅ **2026-08-16**, a pedido do usuário:
+      ambos em `1.8.0`, e o `package-lock.json` (que guarda a versão em dois campos) foi
+      atualizado junto, com `npm install --package-lock-only` — mudou só as duas linhas de
+      versão, sem tocar em dependência. **O `version.js` é a fonte da verdade**; os outros dois
+      o acompanham. Regra registrada em `Contextos/Ambientes.md`.
+- [x] **Cabeçalho obrigatório em `src/`.** ✅ **2026-08-16**, a pedido do usuário, com o
+      marcador correto por linguagem: `//` de linha em `App.jsx` e `main.jsx`, `/* */` de bloco
+      em `index.css`. **Verificado que nenhum cabeçalho vaza para o `dist/`** — era exatamente
+      o motivo da regra de usar comentário de linha no JS (`Contextos/Convencoes.md`, seção 4).
+- [ ] **Cabeçalho ainda ausente nos arquivos de configuração** (`vite.config.js`,
+      `tailwind.config.js`, `postcss.config.js`). Mesmo marcador do JS (`//`). `index.html` e
+      os `.json` seguem de fora por decisão registrada na tabela de `Convencoes.md`.
+- [x] **`.firebase/` removido do controle de versão.** ✅ **2026-08-16**, com autorização
+      explícita do usuário: `git rm -r --cached .firebase/`. O arquivo continua no disco, com
+      o conteúdo intacto (conferido por checksum antes e depois) — saiu só do índice. O
+      `firebase.json` permanece versionado, como deve: é configuração do projeto (pasta
+      pública, rewrite de SPA, cabeçalhos de segurança), não cache.
+      **A remoção está preparada (staged), não commitada** — vale a partir do próximo commit.
+      O arquivo segue existindo nos commits antigos do histórico; como o conteúdo é só uma
+      lista de nomes e checksums dos arquivos publicados, sem nada sensível, não há motivo
+      para reescrever histórico.
+- [x] **Credencial padrão.** ✅ **2026-08-16.** Substituída pela credencial definitiva do
+      usuário, guardada só como hash PBKDF2 com salt. A senha não está escrita em nenhum
+      arquivo do repositório — verificado por varredura. O aviso de "credenciais de fábrica" na
+      interface saiu junto, porque deixou de fazer sentido.
+- [x] **`CURRENT_MONTH_IDX` passou a ler o relógio.** ✅ **2026-08-16**, confirmado pelo
+      usuário. Era fixo em `6` (Julho), herdado do mês em que a planilha legada foi migrada, e
+      fazia o app abrir sempre em Julho independentemente da data. **Testado em 16/08**:
+      Dashboard e Lançamentos abrem em Agosto.
+- [x] **`REFERENCE_YEAR_DEFAULT` passou a ler o relógio.** ✅ **2026-08-16**, decidido pelo
+      usuário: mesma regra do mês. Era fixo em `2026`.
+      **Testado**: sessão nova sem nada salvo começa no ano do relógio; com `2027` salvo, o app
+      opera em 2027 mesmo com o relógio em 2026; com `2025` salvo, opera em 2025 — ou seja, o
+      ano salvo (no navegador ou na aba `Config`) continua mandando sobre o relógio, que é o
+      risco que havia sido levantado ao adiar essa mudança.
+- [x] **`.firebaserc` no `.gitignore`.** ✅ **2026-08-16**, a pedido do usuário. Acrescentado
+      junto o diretório de cache `.firebase/`. Ver a pendência abaixo: o `.gitignore` não
+      desrastreia o que já entrou no repositório.

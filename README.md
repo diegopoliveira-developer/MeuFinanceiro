@@ -71,13 +71,13 @@ meufinanceiro/
 
 ## Login
 
-O app pede usuário e senha ao abrir. Credenciais padrão:
-- **Usuário:** `familia`
-- **Senha:** `meufinanceiro`
+O app pede usuário e senha ao abrir. **A senha não está escrita neste repositório** — o que existe em `src/App.jsx`, na constante `AUTH_CONFIG`, é só o hash PBKDF2 dela (com salt e 210.000 iterações). No login, o app aplica a mesma derivação ao que você digitar e compara os hashes. Quem ler o código-fonte não descobre a senha.
 
-Você pode trocar usuário e senha **dentro do próprio app**, no botão "Alterar usuário e senha" no rodapé do menu lateral (pede a senha atual para confirmar). Isso é salvo no `localStorage` do navegador — funciona normalmente depois de publicado (Vercel, StackBlitz etc.), mas **não persiste dentro do preview de artifacts do Claude.ai**, que bloqueia esse tipo de armazenamento; nesse caso a alteração vale só durante a sessão atual da aba.
+Para definir outra credencial, siga o comentário no topo de `src/App.jsx`, acima de `AUTH_CONFIG`: ele traz o trecho para gerar salt e hash no console do navegador, sem que a senha saia dali.
 
-Se preferir trocar a credencial padrão diretamente no código (sem depender do navegador), veja o comentário no topo de `src/App.jsx`, na constante `AUTH_CONFIG`.
+Também dá para trocar usuário e senha **dentro do app**, no botão "Alterar usuário e senha" no rodapé do menu lateral (pede a senha atual para confirmar). Essa troca é salva no `localStorage` e **vale só no navegador onde foi feita** — para mudar em todos os dispositivos, altere no código-fonte e publique.
+
+> **O que isso protege e o que não protege.** Guardar só o hash impede que alguém com acesso ao código descubra a sua senha. Não impede que essa mesma pessoa **pule a verificação**: como tudo roda no navegador, o login é uma trava contra acesso casual, não autenticação de verdade. Para barreira real, use proteção por senha no provedor de hospedagem.
 
 ## Instalação da planilha (Google Sheets)
 

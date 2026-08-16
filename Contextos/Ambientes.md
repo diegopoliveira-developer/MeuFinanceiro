@@ -165,9 +165,18 @@ por inspeção de código apenas.
 
 ## 6. Versionamento e controle de versão
 
-**Versão interna**: `1.0.0`, hoje declarada apenas no campo `version` do `package.json`.
-**Não existe** o arquivo de versão com histórico (`version.js`) exigido por
-`Basic AI Project Rules.md` — pendência registrada em [`../Notas/TODO.md`](../Notas/TODO.md).
+**Versão interna**: `version.js` na raiz é a **fonte da verdade** — formato `X.Y.Z`, com
+histórico. Hoje em `1.8.0`. É metadado de projeto: fica fora de `src/` e não entra em nenhum
+bundle.
+
+**Ao concluir uma entrega**, nesta ordem:
+
+1. Acrescentar a linha no histórico de `version.js` (`Z` para correção/ajuste, `Y` para
+   funcionalidade nova, `X` para mudança estrutural) e atualizar a constante `VERSION`.
+2. Espelhar em `package.json` (campo `version`).
+3. Rodar `npm install --package-lock-only` para o `package-lock.json` acompanhar — ele guarda
+   a versão em **dois** campos (`version` e `packages[""].version`), e esse comando atualiza
+   os dois sem tocar em dependência nem em `node_modules/`.
 
 **Repositório**: Git, branch principal `main`. Não há remoto de código configurado como parte
 do fluxo documentado; o deploy vai direto da máquina local para o Firebase.

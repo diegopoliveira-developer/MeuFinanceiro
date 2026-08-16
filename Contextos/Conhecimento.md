@@ -87,6 +87,25 @@ no-op e o `onBlur` nunca roda. O sintoma engana: parece que o campo "não salva"
 realmente escuta para `onBlur`, e ele borbulha até a raiz onde o React delega. Vale para
 qualquer teste de campo que confirme ao sair.
 
+### O tema escuro quebra por texto branco fixo, não pelas cores de fundo
+
+Ao ligar o tema escuro, os fundos se resolveram sozinhos (todos vinham de token), mas as
+**pílulas selecionadas** ficaram ilegíveis: o padrão era
+`background: ativo ? INK : PAPER, color: ativo ? "#fff" : INK`. No tema escuro `INK` vira
+claro, e o `"#fff"` fixo dava texto branco sobre fundo branco.
+
+**Solução**: `color: ativo ? PAPER : INK`. `PAPER` inverte junto com o tema, então dá texto
+claro sobre escuro no tema claro e o contrário no escuro. **Regra**: num par fundo/texto que
+inverte, os dois lados têm de vir de token — nunca um token e um literal.
+
+Outros dois pontos que só apareceram no escuro, pela mesma causa: o selo "Limite excedido"
+(`color: "#fff"` sobre `RUST`, que clareia no tema escuro) e o **tooltip do Recharts**, que
+traz `background-color: #fff` próprio e precisa de `contentStyle`/`labelStyle`/`itemStyle`
+explícitos.
+
+**Como varrer**: no tema escuro, procurar por elementos dentro de `main` com fundo de
+luminância alta e contraste < 4,5:1 contra o próprio texto. Foi o que achou os três casos.
+
 ### Um erro de render derruba o app inteiro
 
 Não existe *error boundary*. Exceção não tratada durante o render leva a tela em branco, sem
@@ -193,18 +212,23 @@ nem cópia no repositório. Aconteceu de verdade com o logotipo, entregue em
 `/images/…`) — essa pasta é copiada inteira para o `dist/` na build; `src/assets/` para
 originais que não devem ir para produção (o Vite só embala o que é importado por código).
 
-### O logotipo é feito para fundo claro — sobre o azul-marinho ele some
+### Existem duas versões do logotipo, e usar a errada torna ele ilegível
 
-Medição do arquivo (proporção de contraste WCAG contra o fundo): **~13:1 sobre PARCHMENT ou
-branco**, mas **~1,2:1 sobre o `INK` (#101B2D)** nos 10% de pixels mais escuros — o "Meu"
-azul-escuro e metade da marca ficam praticamente invisíveis. A mediana da marca sobre o escuro
-dá 2,08:1, abaixo do mínimo de 3:1 da WCAG para elemento gráfico.
+Medição de contraste (WCAG) de cada arquivo contra cada fundo:
 
-**Solução**: o componente `Logo` aceita `onDark`, que o apoia numa placa clara (PARCHMENT
-arredondado). É usado nos três lugares com fundo escuro — barra lateral, barra superior do
-mobile e tela de login. **Não** aplicar filtro CSS para clarear: distorce as cores da marca.
+| Arquivo | Sobre fundo claro | Sobre o `INK` (#101B2D) |
+| --- | --- | --- |
+| `logo-meufinanceiro.png` (colorido) | **~13:1** ✅ | 1,2:1 no pior 10% ❌ (o "Meu" azul-escuro some) |
+| `logo-meufinanceiro-white.png` (claro) | ~5:1, lavado ⚠️ | **9,9:1 de mediana, 3,07:1 no pior 10%** ✅ |
 
-Vale para qualquer lugar novo que use o logotipo, e é um ponto a resolver no modo noturno.
+**Regra**: o componente `Logo` recebe `onDark` e escolhe o arquivo — quem usa declara o
+**fundo**, nunca a cor do arquivo. Os três usos atuais (barra lateral, barra superior do
+mobile e login) são todos sobre fundo escuro; a versão colorida fica pronta para os fundos
+claros e para a inversão que o modo noturno vai exigir.
+
+**Não** aplicar filtro CSS para clarear o logotipo colorido: distorce as cores da marca. Houve
+uma solução intermediária de apoiar o logotipo colorido numa placa clara, substituída assim
+que a versão para fundo escuro passou a existir.
 
 ### Manipular PNG sem dependência: `zlib` do Node basta
 
@@ -239,11 +263,15 @@ inicializa sem `document` e falha de forma confusa.
 
 ## Detalhes de implementação que não são óbvios
 
-- **`CURRENT_MONTH_IDX = 6` (Julho) é fixo no código** — é o mês inicialmente selecionado, e
-  **não** o mês atual do sistema. Herança do ponto de referência da planilha legada. Já
-  confunde hoje; se for corrigido para o mês corrente, é mudança de comportamento visível.
-- **`REFERENCE_YEAR_DEFAULT = 2026`** é o ano usado quando não há nada salvo em
-  `localStorage` — ponto de partida fixo, não o ano do relógio.
+- **`CURRENT_MONTH_IDX` lê o relógio** (`new Date().getMonth()`) desde 2026-08-16 — é o mês em
+  que o app abre. Era fixo em `6` (Julho), herança do mês da migração da planilha legada, e
+  fazia o app abrir sempre em Julho. Usa `new Date()` direto porque é declarado **antes** de
+  `TODAY`; referenciar `TODAY` ali daria erro de inicialização.
+- **`REFERENCE_YEAR_DEFAULT` lê o relógio** (`TODAY.getFullYear()`) desde 2026-08-16, pela
+  mesma regra do mês. Era fixo em `2026`. É o ano usado quando **não há nada salvo** e também
+  o assumido por `dueDateOf()` para lançamento sem ano gravado. **Só vale como ponto de
+  partida**: havendo ano no `localStorage` ou na aba `Config` da planilha, é ele que manda —
+  inclusive quando é anterior ao do relógio (quem opera um ano atrasado continua nele).
 - **`dueDay` tem dois significados**: dia de vencimento em geral, e "dia da compra" quando o
   lançamento é de cartão com cartão vinculado (alimenta o cálculo do ciclo de fatura). O
   rótulo na tela muda; o campo é o mesmo.

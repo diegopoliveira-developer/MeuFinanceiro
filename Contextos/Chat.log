@@ -538,3 +538,327 @@ Com isso, as 10 tarefas do pedido de 2026-08-15 estão concluídas. Seguem em
 aberto no TODO apenas itens menores derivados delas (T8b de feriados já feito,
 T9b sobre proteção na hospedagem, T9c sobre o token secreto, o agregado do card
 de financiamento em Parcelas & Recorrências) e o modo noturno pedido hoje.
+
+================================================================================
+DATA: 2026-08-16 04:05:18
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Adicionou um arquivo de logo para fundo escuro (logo-meufinanceiro-white.png),
+pedindo para usá-lo sempre que o fundo for escuro e o outro em fundos claros, e
+para retirar a caixa branca atrás do logo.
+
+Agente:
+Feito. O componente Logo passou a escolher o arquivo pela prop onDark: a arte
+clara nos fundos escuros e a colorida nos claros. A placa clara atrás do logotipo
+foi removida — ela era um contorno criado enquanto só existia a versão colorida,
+e a arte para fundo escuro é a solução correta.
+
+O arquivo estava de novo em dist/, que a build esvazia; movido para o
+código-fonte, com o original em alta resolução preservado em
+src/assets/logo-meufinanceiro-white-original.png e a versão aparada e reduzida
+(640 px, 74 KB contra 455 KB do original) em public/images/.
+
+Contraste medido antes de aplicar, para confirmar que a troca resolve de fato: a
+versão clara dá 9,88:1 de mediana sobre o fundo INK e 3,07:1 no pior decil, acima
+do mínimo de 3:1 da WCAG — contra 1,2:1 da versão colorida no mesmo fundo. A
+tabela das duas artes contra os dois fundos ficou registrada em Conhecimento.md,
+e Convencoes.md ganhou a regra de que o logotipo entra sempre pelo componente
+Logo com onDark, nunca por img solto.
+
+Verificado na interface: login, barra lateral e barra superior do mobile usando
+logo-meufinanceiro-white.png, sem nenhuma caixa atrás (confirmado que não existe
+mais nenhum elemento com o fundo da placa no documento, e que o pai da imagem na
+barra superior é a própria barra escura). Sem rolagem horizontal em 375 px.
+Nenhuma requisição do app com erro — os ERR_CONNECTION_REFUSED no console são o
+cliente do Vite reconectando após os reinícios do servidor durante a sessão.
+
+Observação informada ao usuário: hoje os três lugares onde o logotipo aparece têm
+fundo escuro, então a versão colorida não está visível em lugar nenhum no
+momento; ela fica ligada e pronta para superfícies claras e para a inversão que o
+modo noturno vai exigir. O favicon continua sendo a marca colorida.
+
+O bug conhecido do npm com dependências opcionais quebrou o build mais uma vez
+nesta sessão (terceira ocorrência) e foi resolvido com npm install. Vale mesmo
+regenerar o package-lock.json no Windows, como já registrado no TODO.
+
+================================================================================
+DATA: 2026-08-16 05:12:07
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Faça agora o modo noturno.
+
+Agente:
+Entregue. Seletor de três opções (Claro / Escuro / Sistema) no rodapé da barra
+lateral, com a preferência salva no localStorage e na aba Config da planilha —
+mesma aba já usada pelo ano corrente, credencial e feriados, então nada precisa
+ser republicado no Apps Script.
+
+A decisão que definiu o tamanho do trabalho: em vez de trocar os ~530 pontos que
+usam cor por um contexto de tema, os 12 tokens do App.jsx passaram a apontar para
+variáveis CSS (const INK = "var(--ink)"), com as duas paletas em index.css
+selecionadas por data-theme no <html>. O navegador resolve o resto. Antes de
+adotar a abordagem, verifiquei no próprio navegador que var() resolve dentro de
+atributo de apresentação do SVG — era o risco da abordagem, porque é assim que o
+Recharts recebe cor, e confirmou-se que funciona.
+
+Foi preciso separar um papel que estava sobrecarregado: INK era ao mesmo tempo a
+cor do texto e o fundo do "chrome escuro" (barra lateral, login, card de resumo).
+Se invertesse junto, a barra lateral ficaria clara. Criado o token SHELL para
+esses cinco lugares, que seguem escuros nos dois temas.
+
+Três defeitos apareceram só no tema escuro, todos pela mesma causa — literal fixo
+em vez de token: as pílulas selecionadas usavam color "#fff" sobre um fundo que
+clareia no escuro (texto branco sobre fundo branco); o selo "Limite excedido",
+idem; e o tooltip do Recharts, que traz background-color branco próprio e ignora
+o tema. Corrigidos e registrados em Conhecimento.md com a regra geral: num par
+fundo/texto que inverte, os dois lados têm de vir de token.
+
+Verificação: "Sistema" resolve certo no carregamento nos dois esquemas; escolha
+explícita vence o sistema e sobrevive à recarga (o data-theme é escrito por um
+script síncrono no index.html, antes da primeira pintura, para a tela não piscar);
+a troca sobe para a planilha e é adotada dela (simulado um segundo dispositivo);
+o tema claro ficou idêntico aos valores originais — INK #101B2D, PARCHMENT
+#F7F2E6, PAPER #FFFFFF, LINE #DED5BE —, sem regressão; no tema escuro o pior
+contraste de texto medido é 5,61:1, acima do mínimo de 4,5:1, e uma varredura
+automática das 8 abas não achou mais nenhum ponto com fundo claro e contraste
+insuficiente. Console sem erros e sem avisos do React.
+
+Uma coisa NÃO pôde ser verificada e ficou registrada no TODO: a troca ao vivo
+quando o sistema muda de tema com o app aberto. O listener existe, mas o evento
+change do matchMedia não dispara na emulação do navegador de teste — confirmei
+com uma sonda própria, então é limitação do ambiente e não do código. Vale
+conferir na máquina real.
+
+================================================================================
+DATA: 2026-08-16 05:41:55
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Sim, preencha o version.js com o histórico desses dois dias.
+
+Agente:
+version.js preenchido: VERSION = '1.8.0' e 12 entradas de histórico, em ordem
+cronológica crescente (mesma convenção de Decisoes.md e Chat.log).
+
+Numeração seguindo a regra da norma — Z para correção/ajuste, Y para
+funcionalidade nova. Partiu de 1.0.0 como o estado já publicado antes deste
+ciclo (a versão que estava no package.json), e chegou a 1.8.0: 1.1.0 (T1+T2),
+1.1.1 (correção do contador de parcelas relatada pelo usuário), 1.2.0 (T3, T6,
+T8, T10), 1.3.0 (T9), 1.4.0 (feriados), 1.5.0 (T7), 1.6.0 (T5), 1.6.1 (logotipo
+e favicon), 1.7.0 (T4), 1.7.1 (logo para fundo escuro) e 1.8.0 (modo noturno).
+
+Duas observações sobre a numeração, deixadas explícitas ao usuário: a migração
+de contexto do primeiro dia não gerou entrada, porque não alterou uma linha de
+código; e o modo noturno foi tratado como Y e não como X, apesar de ter mudado a
+base do estilo (tokens para variáveis CSS) — para o usuário nada quebrou e o tema
+claro ficou idêntico. Se ele preferir marcar o ciclo como marco, a norma permite
+determinar 2.0.0 manualmente.
+
+Corrigido também o identificador de template que o arquivo trazia
+(window.__MYSYSTEM_VERSION__ virou __MEUFINANCEIRO_VERSION__).
+
+Validado por execução: sintaxe OK, VERSION bate com a última entrada do
+histórico, nenhuma entrada com campo vazio e ordem estritamente crescente.
+
+Pendência de conformidade do arquivo de versão fechada no TODO; Projeto.md e
+Ambientes.md atualizados, este último com a instrução de acrescentar a linha do
+histórico ao concluir cada entrega. Aberta uma pendência nova: o package.json
+continua em 1.0.0 enquanto o version.js está em 1.8.0 — não mexi na versão do
+pacote por ser decisão do usuário.
+
+================================================================================
+DATA: 2026-08-16 05:58:33
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Alinhe o package.json com o version.js.
+
+Agente:
+package.json passou de 1.0.0 para 1.8.0. Notei que o package-lock.json também
+guarda a versão do pacote, em dois campos (version e packages[""].version), e
+ficaria defasado — atualizado com npm install --package-lock-only, que mexe só
+no lockfile, sem tocar em dependência nem em node_modules. O diff do lock ficou
+em duas linhas, só as de versão.
+
+Verificado: os três arquivos em 1.8.0, package.json continua sendo JSON válido,
+npm pkg get version responde 1.8.0 e o build passa.
+
+Registrado em Ambientes.md que o version.js é a fonte da verdade, com o
+procedimento de três passos ao concluir cada entrega (histórico e VERSION no
+version.js, espelhar no package.json, rodar npm install --package-lock-only).
+Pendência correspondente fechada no TODO.
+
+================================================================================
+DATA: 2026-08-16 06:47:12
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Pediu para trocar as credenciais padrão (novo usuário e uma senha longa e
+aleatória, fornecida no chat e NÃO reproduzida aqui), criptografar e atualizar no
+código-fonte, comparando por hash o que o usuário digitar no login. Observou que
+assim não é preciso salvar na planilha, e que se o código vazar o atacante não
+terá a senha real.
+
+Agente:
+Feito. AUTH_CONFIG passou a guardar usuário, algoritmo, salt, iterações e hash
+PBKDF2-HMAC-SHA256 (210.000 iterações) — a senha em si não foi escrita em nenhum
+arquivo do repositório, o que foi confirmado por varredura no final. O caminho de
+verificação já existia desde a v1.3.0 (checkPassword com o formato PBKDF2), então
+o login não precisou de alteração: ele deriva o hash do que foi digitado e
+compara.
+
+O raciocínio do usuário sobre o vazamento está correto e foi confirmado: com 26
+caracteres aleatórios, reverter o hash é inviável. Mas foi apontado a ele o
+limite que isso NÃO cobre — como o login é verificado no navegador, quem tem o
+código pode pular a verificação pelo DevTools sem nunca descobrir a senha. A
+troca protege a senha, não a trava.
+
+Removido o mecanismo que gravava e lia a credencial na aba Config da planilha,
+introduzido ontem na T9: sem senha fraca a proteger, ele deixou de ter função, e
+o hash para de trafegar para um lugar onde a URL do Apps Script dava acesso a
+ele. Saíram AUTH_CONFIG_ROWS, pushCredentialsToSheet, authRecordFromConfigRows,
+applyRemoteAuth, o bloco de merge na sincronização e a busca da credencial antes
+do login. Decisão registrada em Decisoes.md como substituição explícita da de
+ontem, com o motivo da mudança entre as duas.
+
+Dois ajustes que a remoção exigiu: loadStoredAuthConfig copiava apenas
+username/hash do padrão, o que deixaria o registro PBKDF2 inverificável — passou
+a copiar o registro inteiro; e os parâmetros do PBKDF2 tiveram de subir no
+arquivo, porque AUTH_CONFIG é declarado antes deles e daria erro de inicialização.
+
+Interface e documentação alinhadas: a tela de Diagnóstico perdeu o item de
+sincronização da credencial e o alerta de "credenciais de fábrica" (que não faz
+mais sentido), e ganhou um item dizendo onde a credencial fica; o README deixou
+de publicar usuário e senha em texto puro e agora explica que só o hash está no
+repositório, com o trecho para gerar salt/hash de uma senha nova sem ela sair do
+console.
+
+Verificado na interface real: a credencial antiga de fábrica é rejeitada; usuário
+certo com senha errada é rejeitado; a credencial nova entra. O hash derivado pelo
+navegador (Web Crypto) bate exatamente com o gerado no Node, confirmando que as
+duas implementações concordam, e a derivação custa cerca de 29 ms — imperceptível
+no login. Com planilha falsa configurada: trocar a senha pela interface não
+gravou nada na aba Config, e uma planilha contendo as linhas de credencial da
+versão anterior (com data no futuro) NÃO conseguiu sobrescrever a credencial
+local — o vetor foi fechado junto. Console sem erros e sem avisos do React.
+
+Versão 1.9.0 nos três arquivos (version.js, package.json e package-lock.json).
+Observação: o npm pkg set reordenou as dependências em ordem alfabética no
+package.json — mesmas dependências e versões, só a ordem mudou.
+
+================================================================================
+DATA: 2026-08-16 07:14:36
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+CURRENT_MONTH_IDX deve pegar o mês atual.
+(no meio da execução) adicionar o .firebaserc no .gitignore
+
+Agente:
+As duas coisas já estavam registradas como pendências aguardando decisão do
+usuário; feitas.
+
+CURRENT_MONTH_IDX passou de 6 (fixo em Julho, herança do mês em que a planilha
+legada foi migrada) para new Date().getMonth(). Usa new Date() direto, e não a
+constante TODAY, porque é declarado antes dela — referenciar TODAY ali daria erro
+de inicialização. Testado em 16/08: Dashboard e Lançamentos abrem em Agosto; a
+aba Cartões não tem seletor de mês nesta sessão por estar em estado vazio, o que
+é esperado. Console limpo.
+
+Deliberadamente NÃO alterei junto o REFERENCE_YEAR_DEFAULT, que continua fixo em
+2026 e é a mesma classe de problema. A consequência é diferente: ele é o ano
+usado quando não há nada salvo e também o fallback de dueDateOf() para lançamento
+sem ano, então torná-lo dinâmico faria uma sessão nova em 2027 divergir de uma
+planilha com dados de 2026 — que hoje é recuperada com o ano certo pela aba
+Config. Registrado como decisão do usuário no TODO e em Conhecimento.md.
+
+.gitignore: acrescentados .firebaserc (que guarda o ID do projeto Firebase) e o
+diretório de cache .firebase/. O .firebaserc saiu da listagem de não rastreados.
+Informado ao usuário que ignorar NÃO desrastreia: o .firebase/hosting.ZGlzdA.cache
+entrou no repositório antes da regra e continua versionado, aparecendo como
+modificado a cada deploy; tirá-lo exige git rm --cached, que é operação de Git e
+segue aguardando autorização.
+
+Versão 1.9.1 nos três arquivos.
+
+================================================================================
+DATA: 2026-08-16 07:29:41
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Remova o .firebase e seus arquivos do repositório, mas sem deletar os arquivos
+locais.
+
+Agente:
+Feito com autorização explícita: git rm -r --cached .firebase/ — o --cached tira
+do índice sem tocar no disco. Conferido por checksum antes e depois que o
+conteúdo de .firebase/hosting.ZGlzdA.cache continua idêntico no disco, e que nada
+mais sob .firebase/ está rastreado.
+
+O firebase.json foi deliberadamente MANTIDO no controle de versão: apesar do nome
+parecido, ele é configuração do projeto (pasta pública, rewrite de SPA e os
+cabeçalhos de segurança HTTP) e precisa estar versionado. O que saiu é só o
+diretório de cache da CLI.
+
+Dois pontos informados ao usuário: a remoção está preparada (staged) e passa a
+valer a partir do próximo commit, que não foi feito por falta de autorização; e o
+arquivo continua existindo nos commits antigos do histórico — como o conteúdo é
+apenas uma lista de nomes e checksums dos arquivos publicados, sem nada sensível,
+não há motivo para reescrever histórico.
+
+O .firebaserc nunca chegou a ser rastreado, então não precisou de remoção; já
+estava coberto pelo .gitignore desde a alteração anterior.
+
+================================================================================
+DATA: 2026-08-16 08:03:19
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Cabeçalho obrigatório nos arquivos: src/App.jsx, src/main.jsx, src/index.css
+adaptados a cada linguagem.
+(no meio da execução) REFERENCE_YEAR_DEFAULT deve seguir a regra do mês e pegar o
+ano atual.
+
+Agente:
+Cabeçalhos aplicados nos três arquivos com o marcador correto de cada linguagem,
+conforme a tabela de Convencoes.md, seção 4: comentário de linha (//) em App.jsx
+e main.jsx, comentário de bloco (/* */) em index.css, que não tem comentário de
+linha. Verificado depois do build que NENHUM cabeçalho vaza para o dist/ — era
+exatamente o motivo de a regra exigir comentário de linha no JavaScript, e agora
+está comprovado na prática e não só documentado.
+
+Sobre a data: os três receberam Last Modified 2026-08-16. Vale a ressalva de que,
+no caso do main.jsx, a única alteração de hoje é o próprio cabeçalho — o conteúdo
+dele não muda desde 24/07.
+
+REFERENCE_YEAR_DEFAULT passou de 2026 fixo para TODAY.getFullYear(), fechando a
+decisão que estava pendente desde a mudança do mês. O risco que eu havia
+levantado ao adiar era o ano do relógio atropelar quem opera num ano diferente;
+testado justamente isso: sessão nova sem nada salvo começa no ano do relógio;
+com 2027 salvo, o app opera em 2027 mesmo com o relógio em 2026; com 2025 salvo,
+opera em 2025. O ano salvo (navegador ou aba Config) continua mandando, que é o
+comportamento correto. Console limpo.
+
+Fica no TODO que os arquivos de configuração (vite.config.js, tailwind.config.js,
+postcss.config.js) ainda não têm cabeçalho; index.html e os .json seguem de fora
+por decisão já registrada na tabela de Convencoes.md.
+
+Versão 1.9.2 nos três arquivos.

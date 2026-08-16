@@ -433,12 +433,90 @@ maior exibição na tela, e serviria 724 KB a cada visita); aplicar filtro CSS p
 logotipo no fundo escuro (distorce as cores da marca); usar o logotipo inteiro como favicon
 (ilegível em 64px).
 
-**Consequência**: três arquivos derivados vivem em `public/` — `favicon.png` (64×64),
-`apple-touch-icon.png` (180×180) e `images/logo-meufinanceiro.png` (640 px de largura, 150 KB,
-com a margem transparente aparada). O **original em alta resolução foi preservado** em
-`src/assets/logo-meufinanceiro-original.png`, que não vai para o site; é dele que qualquer
-tamanho novo deve ser regerado, nunca dos derivados. O arquivo entregue em `dist/` não podia
-ficar lá: a build esvazia essa pasta.
+**Consequência**: os arquivos derivados vivem em `public/` — `favicon.png` (64×64),
+`apple-touch-icon.png` (180×180) e `images/logo-meufinanceiro*.png` (640 px de largura, com a
+margem transparente aparada). Os **originais em alta resolução foram preservados** em
+`src/assets/`, que não vai para o site; é deles que qualquer tamanho novo deve ser regerado,
+nunca dos derivados. Os arquivos entregues em `dist/` não podiam ficar lá: a build esvazia
+essa pasta.
+
+---
+
+## 2026-08-16 · Duas versões do logotipo, escolhidas pelo fundo
+
+**Decisão**: o projeto passou a ter duas versões do logotipo — a colorida para fundo claro e
+`logo-meufinanceiro-white.png` para fundo escuro. O componente `Logo` recebe `onDark` e escolhe
+o arquivo; quem usa declara o **fundo**, não a cor. A placa clara atrás do logotipo, criada
+enquanto só existia a versão colorida, foi **removida**.
+
+**Motivo**: o usuário forneceu a arte para fundo escuro, que é a solução correta para o
+problema — a placa era um contorno. Medido: a versão clara dá 9,9:1 de mediana sobre o `INK`
+(3,07:1 no pior 10%, acima do mínimo de 3:1), contra 1,2:1 da colorida no mesmo fundo.
+
+**Consequência**: hoje **todos** os três lugares onde o logotipo aparece têm fundo escuro, então
+a versão colorida não está visível em lugar nenhum — ela fica pronta para superfícies claras e
+para a inversão que o modo noturno vai exigir. O favicon continua sendo a marca colorida.
+Regerar qualquer tamanho a partir dos originais em `src/assets/`.
+
+---
+
+## 2026-08-16 · Tema escuro por indireção em variáveis CSS
+
+**Decisão**: as constantes de cor do `App.jsx` deixaram de conter hexadecimais e passaram a
+apontar para variáveis CSS (`const INK = "var(--ink)"`). As duas paletas vivem em
+`index.css`, selecionadas pelo atributo `data-theme` no `<html>`. O seletor tem três opções —
+Claro, Escuro e Sistema — e a preferência é gravada no `localStorage` **e** na aba `Config` da
+planilha.
+
+**Motivo**: as cores estavam aplicadas por estilo inline em ~530 pontos. Trocar cada um por um
+contexto de tema seria uma refatoração enorme e arriscada, num arquivo sem testes automatizados.
+A indireção por variável CSS muda **12 linhas** e o navegador resolve o resto — inclusive
+dentro de atributos de apresentação do SVG, o que foi verificado antes de adotar a abordagem,
+porque é assim que o Recharts recebe cor.
+
+**Alternativas rejeitadas**: Context API de tema com objeto de cores (tocaria os ~530 pontos);
+`filter: invert()` na página (destrói as cores da marca e das categorias); duplicar a paleta
+num `@media (prefers-color-scheme)` puro (não permitiria a escolha explícita do usuário).
+
+**Consequência**: quem escrever cor nova precisa usar os tokens — **hexadecimal fixo no meio do
+JSX não acompanha o tema**, e é assim que o tema escuro quebra aos poucos. Três exceções
+deliberadas mantêm hexadecimal: o "chrome escuro" (barra lateral, login), que é escuro nos dois
+temas e por isso ganhou os tokens `SHELL*`; as `CAT_COLORS`, que são dado do usuário e não
+tema; e a cor dos cartões, idem. A preferência guarda a **escolha** ("system" inclusive), não o
+resultado — senão "seguir o sistema" congelaria no valor do dia em que foi escolhido.
+
+---
+
+## 2026-08-16 · Credencial só no código-fonte, como hash; sincronização pela planilha removida
+
+**Decisão**: a credencial padrão passou a ser um usuário próprio com uma **senha longa e
+aleatória (26 caracteres)**, guardada em `AUTH_CONFIG` apenas como **hash PBKDF2 com salt** —
+a senha em si não existe em nenhum arquivo do repositório. Em consequência, o mecanismo que
+gravava e lia a credencial na aba `Config` da planilha foi **removido**.
+
+**Substitui**: a decisão de 2026-08-15 que levava o hash da senha para a planilha (opção C
+daquele momento). O que mudou entre as duas: lá a senha era escolhida pelo usuário e podia ser
+fraca, o que exigia encarecer o ataque offline e justificava sincronizar para não voltar ao
+padrão de fábrica ao limpar o navegador. Aqui o padrão de fábrica **já é** a senha forte
+definitiva, então não há mais nada que precise viajar.
+
+**Motivo**: com uma senha aleatória de 26 caracteres, reverter o hash é inviável na prática —
+quem ler o código-fonte não descobre a senha. E não enviar o hash para a planilha elimina o
+ponto em que a URL do Apps Script dava acesso a ele. Menos peça, menos superfície.
+
+**Alternativas rejeitadas**: manter a sincronização em paralelo (o hash voltaria a trafegar
+sem necessidade, já que a fonte da verdade passou a ser o código); usar SHA-256 simples, sem
+salt (bastaria para esta senha, mas o caminho PBKDF2 já existia e não custa nada).
+
+**Consequência**: (a) **uma troca de senha feita pela interface volta a valer só no navegador
+onde foi feita** — para mudar em todos os dispositivos, altera-se o código e publica-se;
+(b) a planilha **não consegue mais impor uma credencial**, vetor que existia enquanto a
+sincronização lia a aba `Config`; (c) trocar a senha exige acesso ao código e um deploy, o que
+é aceitável para um app de uso familiar mantido pelo próprio dono.
+
+**O que continua valendo**: isto protege a SENHA, não a trava. O login segue sendo verificado
+no navegador, então quem tem o código pode pular a verificação pelo DevTools sem nunca
+descobrir a senha — a decisão de 2026-08-15 sobre o login ser trava client-side não mudou.
 
 ---
 

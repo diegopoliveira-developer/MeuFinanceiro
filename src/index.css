@@ -1,7 +1,105 @@
+/*
+ * Project: MeuFinanceiro
+ * File: index.css
+ * Developed By: Diego Oliveira
+ * Last Modified: 2026-08-16
+ * Copyright (c) 2026. All rights reserved.
+ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* =========================================================================
+   PALETA — tema claro e escuro
+   -------------------------------------------------------------------------
+   As constantes de cor do App.jsx (INK, PAPER, LINE…) apontam para estas
+   variáveis, então trocar o tema aqui muda o app inteiro sem tocar nos ~530
+   pontos que usam cor. O tema ativo é o atributo data-theme no <html>,
+   escrito pelo script de index.html ANTES da primeira pintura.
+
+   Os tokens *-shell são o "chrome escuro" (barra lateral, tela de login):
+   continuam escuros nos dois temas, por isso não invertem.
+   ========================================================================= */
+:root,
+:root[data-theme="light"] {
+  --ink: #101B2D;          /* texto principal */
+  --ink-soft: #1B2A42;
+  --parchment: #F7F2E6;    /* fundo da página */
+  --paper: #FFFFFF;        /* fundo de card */
+  --surface-alt: #FBF8F1;  /* cabeçalho de tabela, faixas */
+  --line: #DED5BE;         /* bordas */
+  --slate: #5B6472;        /* texto secundário */
+  --track: #EEE7D4;        /* trilho de barra de progresso */
+  --track-bar: #D8D0BC;    /* barra inativa em gráfico */
+
+  --sage: #3D6B5C;
+  --sage-soft: #E7EFEA;
+  --sage-icon: #D7E5DE;
+  --gold: #C0932A;
+  --gold-soft: #F5E9CC;
+  --gold-icon: #ECD9A5;
+  --gold-ink: #8C6A1B;     /* texto sobre fundo dourado */
+  --rust: #B3472F;
+  --rust-soft: #F5E3DD;
+  --rust-icon: #EFD6CC;
+
+  --chip-neutral: #EFEBE0; /* status pendente */
+  --chip-muted: #E6E2D6;   /* status "não será pago" */
+  --kpi-icon: #EEF1F5;
+
+  --shell: #101B2D;        /* barra lateral / login — escuro nos dois temas */
+  --shell-soft: #1B2A42;
+  --btn-bg: #101B2D;
+  --btn-bg-hover: #1B2A42;
+  --btn-fg: #FFFFFF;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --ink: #E8EDF6;
+  --ink-soft: #CBD6E6;
+  --parchment: #10151D;
+  --paper: #19202B;
+  --surface-alt: #1F2733;
+  --line: #2E3846;
+  --slate: #9BA7B8;
+  --track: #2A3341;
+  --track-bar: #38434F;
+
+  /* Acentos clareados: os tons originais foram escolhidos para papel claro e
+     não alcançam 3:1 sobre fundo escuro. */
+  --sage: #79C6A4;
+  --sage-soft: #1B3229;
+  --sage-icon: #244437;
+  --gold: #E3BC5E;
+  --gold-soft: #33290F;
+  --gold-icon: #45361A;
+  --gold-ink: #E8C46A;
+  --rust: #F58F74;
+  --rust-soft: #3A201A;
+  --rust-icon: #4D2A22;
+
+  --chip-neutral: #262F3C;
+  --chip-muted: #222A35;
+  --kpi-icon: #232C39;
+
+  --shell: #0A1019;
+  --shell-soft: #16202E;
+  --btn-bg: #E8EDF6;
+  --btn-bg-hover: #FFFFFF;
+  --btn-fg: #101822;
+
+  color-scheme: dark;
+}
+
 html, body, #root {
   height: 100%;
+}
+
+/* O fundo da página acompanha o tema também fora do alcance do React (área de
+   overscroll do navegador). */
+body {
+  background: var(--parchment);
 }

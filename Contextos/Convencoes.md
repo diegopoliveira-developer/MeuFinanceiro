@@ -177,8 +177,18 @@ Específicas desta stack (JavaScript/React):
 - **Todo campo de texto livre tem `maxLength`** (descrição 120, observações 500).
 - **Estilo**: classes Tailwind para layout/espaçamento; estilo inline apenas para os tokens
   de cor e tipografia definidos no topo de `App.jsx` (`INK`, `PARCHMENT`, `SAGE`, `GOLD`,
-  `RUST`…). Não introduzir cor hexadecimal solta no meio do JSX — usar o token.
+  `RUST`…). **Nunca hexadecimal solto no meio do JSX**: os tokens apontam para variáveis CSS e
+  um literal não acompanha o tema — é assim que o tema escuro se degrada. Se faltar um token
+  para o caso, criar a variável em `index.css` **nas duas paletas** e um token novo, em vez de
+  escrever a cor no lugar.
+- **Num par fundo/texto que inverte, os dois lados vêm de token.** `background: INK` pede
+  `color: PAPER`, não `color: "#fff"` — ver `Conhecimento.md`.
+- Exceções deliberadas ao hexadecimal: os tokens `SHELL*` (chrome escuro nos dois temas) e as
+  cores de categoria/cartão, que são dado do usuário e não tema.
 - **Ícone sempre de `lucide-react`**, importado nominalmente no topo do arquivo.
+- **O logotipo entra sempre pelo componente `Logo`, com `onDark` conforme o fundo** — nunca por
+  `<img>` solto apontando para um arquivo. São duas artes, e a errada fica ilegível; ver
+  `Conhecimento.md`.
 - **Ao adicionar campo novo em lançamento/categoria/cartão/veículo/orçamento**, atualizar em
   conjunto: o estado, `toSheetRow`, o parser da planilha, o template do Apps Script na aba
   Conexão **e** a tabela de colunas no `README.md`. Esquecer um desses é o modo de falha mais

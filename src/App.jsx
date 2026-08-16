@@ -1,3 +1,9 @@
+// Project: MeuFinanceiro
+// File: App.jsx
+// Developed By: Diego Oliveira
+// Last Modified: 2026-08-16
+// Copyright (c) 2026. All rights reserved.
+
 import React, { useState, useMemo, useCallback } from "react";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -10,29 +16,53 @@ import {
   AlertCircle, ChevronDown, ChevronRight, Download, Upload, PiggyBank,
   ArrowUpRight, ArrowDownRight, BookOpen, CheckCircle2, Circle, Clock,
   AlertTriangle, Eraser, Info, Repeat, ListOrdered, Infinity as InfinityIcon, Ban, Layers, Search, ClipboardPaste,
-  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert, Target, Copy, Landmark, Menu
+  Lock, LogOut, ShieldCheck, Archive, KeyRound, Eye, EyeOff, RefreshCw, ShieldAlert, Target, Copy, Landmark, Menu,
+  Sun, Moon, MonitorSmartphone
 } from "lucide-react";
 
 /* =========================================================================
    TOKENS — "Livro-Caixa" (ledger book) design language
    Ink navy + parchment + sage/gold/rust, Fraunces + Inter + JetBrains Mono
    ========================================================================= */
-const INK = "#101B2D";
-const INK_SOFT = "#1B2A42";
-const PARCHMENT = "#F7F2E6";
-const PAPER = "#FFFFFF";
-const LINE = "#DED5BE";
-const SAGE = "#3D6B5C";
-const SAGE_SOFT = "#E7EFEA";
-const GOLD = "#C0932A";
-const GOLD_SOFT = "#F5E9CC";
-const RUST = "#B3472F";
-const RUST_SOFT = "#F5E3DD";
-const SLATE = "#5B6472";
+/* Cada token aponta para uma variável CSS definida em index.css, que troca conforme o
+   data-theme do <html>. É isso que faz o tema inteiro mudar sem tocar nos ~530 pontos que
+   usam cor: `style={{ color: INK }}` vira `color: var(--ink)`, e o navegador resolve —
+   inclusive dentro de atributos de apresentação do SVG, que é como o Recharts recebe cor.
+
+   Os tokens *_SHELL são o "chrome escuro" (barra lateral, tela de login): permanecem escuros
+   nos dois temas, por isso não invertem junto com INK. */
+const INK = "var(--ink)";
+const INK_SOFT = "var(--ink-soft)";
+const PARCHMENT = "var(--parchment)";
+const PAPER = "var(--paper)";
+const SURFACE_ALT = "var(--surface-alt)";
+const LINE = "var(--line)";
+const SAGE = "var(--sage)";
+const SAGE_SOFT = "var(--sage-soft)";
+const SAGE_ICON = "var(--sage-icon)";
+const GOLD = "var(--gold)";
+const GOLD_SOFT = "var(--gold-soft)";
+const GOLD_ICON = "var(--gold-icon)";
+const GOLD_INK = "var(--gold-ink)";
+const RUST = "var(--rust)";
+const RUST_SOFT = "var(--rust-soft)";
+const RUST_ICON = "var(--rust-icon)";
+const SLATE = "var(--slate)";
+const TRACK = "var(--track)";
+const TRACK_BAR = "var(--track-bar)";
+const CHIP_NEUTRAL = "var(--chip-neutral)";
+const CHIP_MUTED = "var(--chip-muted)";
+const KPI_ICON = "var(--kpi-icon)";
+const SHELL = "var(--shell)";
+const SHELL_TEXT = "#E8EDF6";
+const SHELL_MUTED = "#8B95A8";
 
 const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const MONTHS_FULL = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const CURRENT_MONTH_IDX = 6; // Julho — ponto de referência da planilha legada
+// Mês em que o app abre. Lido do relógio, não fixo: era 6 (Julho), herdado do mês em que a
+// planilha legada foi migrada, e por isso o app abria sempre em Julho.
+// `new Date()` direto e não `TODAY` porque este const é declarado antes dele.
+const CURRENT_MONTH_IDX = new Date().getMonth();
 
 const CAT_COLORS = ["#3D6B5C", "#B3472F", "#C0932A", "#5C7C99", "#8A6BAE", "#4E8B7C", "#9C6B4E", "#6B7A8F"];
 
@@ -40,8 +70,12 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const brl = (n) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n || 0);
 const brlCompact = (n) => new Intl.NumberFormat("pt-BR", { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(n || 0);
 
-const REFERENCE_YEAR_DEFAULT = 2026;
 const TODAY = new Date();
+// Ano em que o app começa quando não há nada salvo — do relógio, pela mesma regra do mês.
+// Era fixo em 2026. É também o ano assumido por dueDateOf() para lançamento sem ano gravado.
+// Só vale como ponto de partida: havendo ano salvo no localStorage ou na aba Config da
+// planilha, é ele que manda, e a sincronização nunca regride o ano.
+const REFERENCE_YEAR_DEFAULT = TODAY.getFullYear();
 const SOON_WINDOW_DAYS = 5;
 
 /* =========================================================================
@@ -55,17 +89,38 @@ const SOON_WINDOW_DAYS = 5;
    domínio no provedor de hospedagem (ex.: Vercel Password Protection) ou
    implemente autenticação em um backend próprio.
 
-   Para trocar o usuário/senha padrão, gere um novo hash rodando isto no
-   console do navegador (com a senha desejada) e cole o resultado abaixo:
+   Parâmetros do PBKDF2 aqui em cima porque AUTH_CONFIG, logo abaixo, os usa.
 
-   crypto.subtle.digest("SHA-256", new TextEncoder().encode("usuario:senha"))
-     .then(b => console.log([...new Uint8Array(b)].map(x => x.toString(16).padStart(2,"0")).join("")))
+   A SENHA NÃO ESTÁ AQUI — só o hash PBKDF2 dela. Na hora do login, o app
+   aplica a mesma derivação ao que foi digitado e compara os hashes; a senha
+   em si nunca existe no código nem em lugar nenhum do repositório. Quem ler
+   o código-fonte não descobre a senha: com uma senha longa e aleatória,
+   reverter o hash é inviável na prática.
 
-   Credenciais padrão: usuário "familia" · senha "meufinanceiro"
+   Isso NÃO torna o login seguro contra quem tem o código: como tudo roda no
+   navegador, o atacante não precisa da senha — pode simplesmente pular a
+   verificação pelo DevTools. O que a troca protege é a SENHA, não a trava.
+
+   Para trocar o usuário/senha padrão, rode isto no console do navegador com
+   a senha desejada e cole salt/hash abaixo (a senha não sai daí):
+
+   (async (senha) => {
+     const salt = crypto.getRandomValues(new Uint8Array(16));
+     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(senha), "PBKDF2", false, ["deriveBits"]);
+     const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 210000, hash: "SHA-256" }, key, 256);
+     const hex = (b) => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
+     console.log("salt:", hex(salt), "\nhash:", hex(bits));
+   })("SUA_SENHA_AQUI");
    ========================================================================= */
+const PBKDF2_ITERATIONS = 210000;
+const AUTH_ALGO_PBKDF2 = "pbkdf2-sha256";
+
 const AUTH_CONFIG = {
-  username: "familia",
-  hash: "a2c59262517a54d9428bd45ee36bd8a74ae6cabba2ac6a02edf2408dccd74f3e", // sha256("familia:meufinanceiro")
+  username: "diego",
+  algo: AUTH_ALGO_PBKDF2,
+  salt: "6c0346c69231462fd309f120bf85a205",
+  iterations: PBKDF2_ITERATIONS,
+  hash: "c35ff42f47a9665c19dc3cf546cf87ff9c624f6ae7538a10856d8e366f83aeba",
   maxAttempts: 5,
   lockoutSeconds: 30,
 };
@@ -130,20 +185,18 @@ async function sha256Hex(text) {
 /* -------------------------------------------------------------------------
    HASH DE SENHA — PBKDF2 com salt
    -------------------------------------------------------------------------
-   A credencial sai deste navegador: ela é gravada na planilha do usuário para
-   valer em qualquer dispositivo. Isso significa que quem obtiver a URL do Apps
-   Script vê o hash — então ele precisa ser CARO de atacar offline. SHA-256
-   simples (o formato antigo, sem salt) cai em ataque de dicionário em segundos.
+   O que existe no código é o hash, nunca a senha. No login, o app deriva o
+   hash do que foi digitado e compara — a senha em si não aparece em lugar
+   nenhum do repositório.
 
-   PBKDF2-HMAC-SHA256, salt aleatório por credencial, 210.000 iterações
-   (recomendação OWASP para PBKDF2-SHA256). Isso NÃO transforma o login em
-   autenticação de verdade — continua sendo trava client-side, como registrado
-   em Decisoes.md; só encarece o ataque a quem puser as mãos no hash.
+   PBKDF2-HMAC-SHA256, salt aleatório, 210.000 iterações (recomendação OWASP
+   para PBKDF2-SHA256). Os parâmetros ficam aqui em cima porque AUTH_CONFIG,
+   declarado antes, os usa.
+
+   Continua sendo trava client-side: encarece descobrir a SENHA, não impede
+   quem tem o código de pular a verificação. Ver Decisoes.md.
    ------------------------------------------------------------------------- */
-const PBKDF2_ITERATIONS = 210000;
-const AUTH_ALGO_PBKDF2 = "pbkdf2-sha256";
-// Chave da conexão com a planilha. No escopo do módulo porque tanto o Dashboard quanto a tela
-// de login precisam dela — o login lê a conexão para buscar a credencial mais recente.
+// Chave da conexão com a planilha, no escopo do módulo porque Dashboard e login usam.
 const SHEET_STORAGE_KEY = "meufinanceiro_sheet_v1";
 
 const bytesToHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -403,22 +456,19 @@ function seedTransactions() {
    entra o texto ao lado sai — repetir o nome ao lado do logotipo seria redundante.
    O arquivo vive em public/images/ e é servido pela raiz do site; a altura é o que se
    controla, a largura acompanha a proporção. */
+/* Existem DUAS versões do logotipo, e cada uma só funciona no seu fundo:
+   - a colorida (`logo-meufinanceiro.png`) para fundo claro — sobre o escuro o "Meu"
+     azul-marinho cai para ~1,2:1 de contraste e some;
+   - a clara (`logo-meufinanceiro-white.png`) para fundo escuro — ~9,9:1 de mediana sobre o
+     `INK`, contra ~5:1 no claro, onde o branco sobre bege fica lavado.
+   Daí a prop `onDark`: quem usa o logotipo declara o fundo, não a cor do arquivo. */
 function Logo({ height = 30, onDark = false, style }) {
-  const img = (
+  return (
     <img
-      src="/images/logo-meufinanceiro.png"
+      src={onDark ? "/images/logo-meufinanceiro-white.png" : "/images/logo-meufinanceiro.png"}
       alt="MeuFinanceiro"
       style={{ height, width: "auto", display: "block", ...style }}
     />
-  );
-  if (!onDark) return img;
-  // O logotipo é desenhado para fundo claro. Sobre o azul-marinho do app, o "Meu" e metade da
-  // marca ficam em ~1,2:1 de contraste — na prática, invisíveis. A placa clara devolve os
-  // ~13:1 do material original sem mexer nas cores da marca.
-  return (
-    <span style={{ display: "inline-block", background: PARCHMENT, borderRadius: 9, padding: `${Math.round(height * 0.24)}px ${Math.round(height * 0.32)}px`, lineHeight: 0 }}>
-      {img}
-    </span>
   );
 }
 
@@ -440,7 +490,7 @@ function LedgerTab({ icon: Icon, label, active, onClick, badge }) {
       <Icon size={16} strokeWidth={2} style={{ opacity: active ? 1 : 0.75 }} />
       <span className="text-[13px] font-medium tracking-wide flex-1" style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>
       {!!badge && (
-        <span className="text-[10.5px] font-semibold rounded-full flex items-center justify-center" style={{ minWidth: 18, height: 18, padding: "0 5px", background: active ? RUST : "#E7684F", color: "#fff" }}>{badge}</span>
+        <span className="text-[10.5px] font-semibold rounded-full flex items-center justify-center" style={{ minWidth: 18, height: 18, padding: "0 5px", background: active ? "#B3472F" : "#E7684F", color: "#fff" }}>{badge}</span>
       )}
       {active && <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: GOLD }} />}
     </button>
@@ -449,10 +499,10 @@ function LedgerTab({ icon: Icon, label, active, onClick, badge }) {
 
 function KpiCard({ label, value, sub, icon: Icon, tone = "ink" }) {
   const tones = {
-    ink: { bg: PAPER, fg: INK, iconBg: "#EEF1F5" },
-    sage: { bg: SAGE_SOFT, fg: SAGE, iconBg: "#D7E5DE" },
-    rust: { bg: RUST_SOFT, fg: RUST, iconBg: "#EFD6CC" },
-    gold: { bg: GOLD_SOFT, fg: "#8C6A1B", iconBg: "#ECD9A5" },
+    ink: { bg: PAPER, fg: INK, iconBg: KPI_ICON },
+    sage: { bg: SAGE_SOFT, fg: SAGE, iconBg: SAGE_ICON },
+    rust: { bg: RUST_SOFT, fg: RUST, iconBg: RUST_ICON },
+    gold: { bg: GOLD_SOFT, fg: GOLD_INK, iconBg: GOLD_ICON },
   };
   const t = tones[tone];
   return (
@@ -500,7 +550,7 @@ function Modal({ title, onClose, children, wide, closeOnBackdrop = true }) {
 function EmptyState({ icon: Icon, title, desc }) {
   return (
     <div className="flex flex-col items-center justify-center text-center py-14 px-6">
-      <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 14, marginBottom: 14 }}><Icon size={22} color="#8C6A1B" /></div>
+      <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 14, marginBottom: 14 }}><Icon size={22} color={GOLD_INK} /></div>
       <div className="text-[14px] font-semibold mb-1" style={{ color: INK, fontFamily: "Inter, sans-serif" }}>{title}</div>
       <div className="text-[13px] max-w-xs" style={{ color: SLATE, fontFamily: "Inter, sans-serif" }}>{desc}</div>
     </div>
@@ -510,7 +560,7 @@ function EmptyState({ icon: Icon, title, desc }) {
 /* =========================================================================
    MAIN APP
    ========================================================================= */
-function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, applyRemoteAuth, persistWarning, isDefaultCredentials, loginLog }) {
+function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning, isDefaultCredentials, loginLog, theme, setTheme, applyRemoteTheme }) {
   const [tab, setTab] = useState("dashboard");
   const [credentialsModalOpen, setCredentialsModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -704,30 +754,19 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     })
     .filter((h) => /^\d{4}-\d{2}-\d{2}$/.test(h.date));
 
-  /* ---------- Credencial de acesso na planilha ----------
-     Vai para a aba "Config" (chave/valor), que já existe e que o Apps Script já lê e grava —
-     assim o usuário não precisa criar aba nem republicar o script. O que sobe é o hash com
-     salt, nunca a senha: ver o bloco de PBKDF2 no topo do arquivo e Decisoes.md. */
-  const AUTH_CONFIG_ROWS = [
-    ["auth_usuario", "AuthUsuario", "username"], ["auth_algoritmo", "AuthAlgoritmo", "algo"],
-    ["auth_salt", "AuthSalt", "salt"], ["auth_iteracoes", "AuthIteracoes", "iterations"],
-    ["auth_hash", "AuthHash", "hash"], ["auth_atualizado_em", "AuthAtualizadoEm", "updatedAt"],
-  ];
-  const pushCredentialsToSheet = async (newUsername, newPassword) => {
-    const record = await updateCredentials(newUsername, newPassword);
-    pushToSheet({ Config: AUTH_CONFIG_ROWS.map(([id, chave, campo]) => ({ ID: id, Chave: chave, Valor: record[campo] ?? "" })) });
-    return record;
+  /* ---------- Tema na planilha ----------
+     Também na aba "Config", pelo mesmo motivo do ano corrente, da credencial e dos feriados:
+     a aba já existe e o Apps Script já a lê e grava, então nada precisa ser republicado. */
+  const setThemeAndSync = (choice) => {
+    setTheme(choice);
+    pushToSheet({ Config: [{ ID: "tema", Chave: "Tema", Valor: choice }] });
   };
-  const authRecordFromConfigRows = (rows) => {
-    const byKey = {};
-    rows.forEach((r) => { if (r && r.Chave) byKey[String(r.Chave)] = r.Valor; });
-    if (!byKey.AuthHash || !byKey.AuthUsuario) return null;
-    return {
-      username: String(byKey.AuthUsuario), algo: byKey.AuthAlgoritmo || undefined,
-      salt: byKey.AuthSalt || undefined, iterations: Number(byKey.AuthIteracoes) || undefined,
-      hash: String(byKey.AuthHash), updatedAt: byKey.AuthAtualizadoEm ? String(byKey.AuthAtualizadoEm) : "",
-    };
-  };
+
+  /* A credencial NÃO vai mais para a planilha. O padrão do código-fonte passou a ser uma senha
+     longa e aleatória, guardada só como hash PBKDF2 — não há mais o que sincronizar, e o hash
+     deixa de trafegar para um lugar onde a URL do Apps Script daria acesso a ele.
+     Consequência aceita: uma troca de senha feita pela interface volta a valer só no navegador
+     onde foi feita. Ver Decisoes.md. */
 
   /* ---------- CRUD: categories ---------- */
   const addCategory = (type, name) => {
@@ -1033,6 +1072,10 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       if (remoteCurrentYear && remoteCurrentYear > currentYear) setCurrentYear(remoteCurrentYear);
       const effectiveCurrentYear = remoteCurrentYear && remoteCurrentYear > currentYear ? remoteCurrentYear : currentYear;
 
+      // Tema: a preferência é do usuário, não do dispositivo — a planilha manda.
+      const remoteTheme = remoteConfig.find((r) => String(r.Chave) === "Tema");
+      if (remoteTheme?.Valor) applyRemoteTheme(String(remoteTheme.Valor).trim());
+
       // Feriados personalizados: união simples por data — o que só existe de um lado passa a
       // existir nos dois. São poucos, mudam raramente, e o custo de um conflito é baixo.
       const remoteHolidays = holidaysFromConfigRows(remoteConfig);
@@ -1044,17 +1087,6 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         if (toPush.length) pushToSheet({ Config: toPush.map(holidayRow) });
         return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
       });
-
-      // Credencial de acesso: adota a da planilha se ela for mais recente que a deste
-      // navegador; se a local for mais recente (ou a planilha ainda não tiver nenhuma), sobe a
-      // local. É o que faz a troca de senha valer em qualquer dispositivo.
-      const remoteAuth = authRecordFromConfigRows(remoteConfig);
-      const localAuthAt = authConfig.updatedAt || "";
-      if (remoteAuth && remoteAuth.updatedAt > localAuthAt) {
-        applyRemoteAuth(remoteAuth);
-      } else if (authConfig.updatedAt && (!remoteAuth || localAuthAt > (remoteAuth.updatedAt || ""))) {
-        pushToSheet({ Config: AUTH_CONFIG_ROWS.map(([id, chave, campo]) => ({ ID: id, Chave: chave, Valor: authConfig[campo] ?? "" })) });
-      }
 
       const monthIndex = (label) => {
         const i = MONTHS.findIndex((m) => m.toLowerCase() === String(label || "").trim().slice(0, 3).toLowerCase());
@@ -1243,11 +1275,12 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         }
         input:focus, select:focus, textarea:focus { border-color: ${SAGE} !important; box-shadow: 0 0 0 3px rgba(61,107,92,0.12); }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-thumb { background: #C9BFA2; border-radius: 8px; }
+        ::-webkit-scrollbar-thumb { background: ${LINE}; border-radius: 8px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        .btn-primary { background: ${INK}; color: #fff; }
-        .btn-primary:hover { background: ${INK_SOFT}; }
-        .btn-ghost:hover { background: rgba(16,27,45,0.05); }
+        .btn-primary { background: var(--btn-bg); color: var(--btn-fg); }
+        .btn-primary:hover { background: var(--btn-bg-hover); }
+        /* currentColor em vez de um cinza fixo: no tema escuro um véu preto não apareceria. */
+        .btn-ghost:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
         .chip { transition: all .15s ease; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(6px);} to { opacity: 1; transform: translateY(0);} }
         .fade-up { animation: fadeUp .35s ease both; }
@@ -1262,7 +1295,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         {/* ============ SIDEBAR — ledger index tabs ============ */}
         <aside
           className={`fixed lg:sticky top-0 left-0 z-50 h-screen transition-transform duration-200 ease-out ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
-          style={{ width: 236, background: INK, alignSelf: "flex-start", paddingTop: 18, display: "flex", flexDirection: "column" }}
+          style={{ width: 236, background: SHELL, alignSelf: "flex-start", paddingTop: 18, display: "flex", flexDirection: "column" }}
         >
           <div className="px-5 pb-6 flex items-start gap-2.5">
             <div className="flex-1 min-w-0">
@@ -1279,9 +1312,11 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
             <LedgerTab icon={Settings2} label="Categorias" active={tab === "categorias"} onClick={() => { setTab("categorias"); setSidebarOpen(false); }} />
             <LedgerTab icon={Link2} label="Conexão Google Sheets" active={tab === "conexao"} onClick={() => { setTab("conexao"); setSidebarOpen(false); }} />
             <LedgerTab icon={TrendingUp} label="Relatório Anual" active={tab === "relatorio"} onClick={() => { setTab("relatorio"); setSidebarOpen(false); }} />
-            <LedgerTab icon={ShieldAlert} label="Diagnóstico de Segurança" active={tab === "seguranca"} onClick={() => { setTab("seguranca"); setSidebarOpen(false); }} badge={isDefaultCredentials ? 1 : 0} />
+            <LedgerTab icon={ShieldAlert} label="Diagnóstico de Segurança" active={tab === "seguranca"} onClick={() => { setTab("seguranca"); setSidebarOpen(false); }} />
           </nav>
           <div className="px-4 pt-4 pb-4 flex-shrink-0">
+            <ThemeSelector theme={theme} setTheme={setThemeAndSync} />
+            <div className="h-2" />
             <button onClick={() => { setCredentialsModalOpen(true); setSidebarOpen(false); }} className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-medium" style={{ color: "#C7CEDA" }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               <KeyRound size={15} /> Alterar usuário e senha
@@ -1295,7 +1330,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 
         {credentialsModalOpen && (
           <ChangeCredentialsModal
-            authConfig={authConfig} verifyCredentials={verifyCredentials} updateCredentials={pushCredentialsToSheet}
+            authConfig={authConfig} verifyCredentials={verifyCredentials} updateCredentials={updateCredentials}
             persistWarning={persistWarning} onClose={() => setCredentialsModalOpen(false)}
           />
         )}
@@ -1303,7 +1338,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         {/* ============ MAIN ============ */}
         <main className="flex-1 min-w-0">
           {/* Barra superior — só aparece em telas menores que o breakpoint lg */}
-          <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3" style={{ background: INK, borderBottom: `1px solid rgba(255,255,255,0.08)` }}>
+          <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3" style={{ background: SHELL, borderBottom: `1px solid rgba(255,255,255,0.08)` }}>
             <button onClick={() => setSidebarOpen(true)} className="p-1.5 rounded-md flex-shrink-0" style={{ color: "#fff" }} aria-label="Abrir menu"><Menu size={20} /></button>
             <Logo height={22} onDark />
           </div>
@@ -1461,7 +1496,7 @@ function LoginScreen({ onSuccess, authConfig, onAttempt }) {
   };
 
   return (
-    <div style={{ fontFamily: "Inter, sans-serif", background: INK, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+    <div style={{ fontFamily: "Inter, sans-serif", background: SHELL, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
         input:focus { border-color: ${SAGE} !important; box-shadow: 0 0 0 3px rgba(61,107,92,0.18); }
@@ -1509,7 +1544,7 @@ function LoginScreen({ onSuccess, authConfig, onAttempt }) {
             onMouseLeave={() => setBtnHover(false)}
             className="w-full mt-4 py-3 rounded-lg text-[14px] font-semibold flex items-center justify-center gap-2"
             style={{
-              background: isLocked || checking ? "#8A93A6" : btnHover ? GOLD : INK,
+              background: isLocked || checking ? "#8A93A6" : btnHover ? "#C0932A" : "#101B2D",
               color: "#fff",
               border: "none",
               cursor: isLocked || checking ? "not-allowed" : "pointer",
@@ -1572,7 +1607,7 @@ function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentia
             <p className="text-[13px]" style={{ color: INK }}>Credenciais atualizadas com sucesso. Use o novo usuário e senha no próximo login. Se a sincronização com o Google Sheets estiver configurada, elas passam a valer também nos seus outros dispositivos.</p>
           </div>
           {persistWarning && (
-            <div className="flex items-start gap-2 mb-4 px-3.5 py-3 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+            <div className="flex items-start gap-2 mb-4 px-3.5 py-3 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
               <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
               <span>Este navegador não permitiu salvar de forma permanente — a alteração vale só para esta aba/sessão. Ao recarregar a página, as credenciais anteriores voltam a valer.</span>
             </div>
@@ -1599,7 +1634,7 @@ function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentia
           )}
 
           <p className="text-[11.5px]" style={{ color: SLATE }}>
-            Isso é salvo neste navegador (armazenamento local). Se você limpar os dados do navegador, usar uma aba anônima, ou acessar de outro dispositivo, as credenciais voltam a ser as definidas no código-fonte (constante <code className="px-1 rounded" style={{ background: "#EEE7D4" }}>AUTH_CONFIG</code>).
+            Isso é salvo neste navegador (armazenamento local). Se você limpar os dados do navegador, usar uma aba anônima, ou acessar de outro dispositivo, as credenciais voltam a ser as definidas no código-fonte (constante <code className="px-1 rounded" style={{ background: TRACK }}>AUTH_CONFIG</code>).
           </p>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -1609,6 +1644,65 @@ function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentia
         </form>
       )}
     </Modal>
+  );
+}
+
+/* =========================================================================
+   TEMA (claro / escuro / seguir o sistema)
+   -------------------------------------------------------------------------
+   A preferência guarda a ESCOLHA ("system" inclusive), não o resultado — só
+   assim "seguir o sistema" continua acompanhando o sistema depois. O tema
+   efetivo é resolvido na hora e escrito em data-theme no <html>; as cores
+   saem daí (ver index.css). O primeiro data-theme é escrito pelo script de
+   index.html, antes da primeira pintura.
+   ========================================================================= */
+const THEME_STORAGE_KEY = "meufinanceiro_theme_v1";
+const THEME_OPTIONS = [
+  { value: "light", label: "Claro", icon: Sun },
+  { value: "dark", label: "Escuro", icon: Moon },
+  { value: "system", label: "Sistema", icon: MonitorSmartphone },
+];
+const prefersDark = () => {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) { return false; }
+};
+const resolveTheme = (choice) => (choice === "dark" || (choice === "system" && prefersDark()) ? "dark" : "light");
+const loadStoredTheme = () => {
+  try {
+    const raw = window.localStorage?.getItem(THEME_STORAGE_KEY);
+    if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  } catch (_) { /* localStorage indisponível — vale o padrão nesta sessão */ }
+  return "system";
+};
+// A cor da barra do navegador no mobile acompanha o tema.
+const applyTheme = (choice) => {
+  const efetivo = resolveTheme(choice);
+  document.documentElement.setAttribute("data-theme", efetivo);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", efetivo === "dark" ? "#0A1019" : "#101B2D");
+  return efetivo;
+};
+
+function ThemeSelector({ theme, setTheme, compact = false }) {
+  return (
+    <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "rgba(255,255,255,0.06)" }} role="group" aria-label="Tema da interface">
+      {THEME_OPTIONS.map((o) => {
+        const Icon = o.icon;
+        const ativo = theme === o.value;
+        return (
+          <button
+            key={o.value}
+            onClick={() => setTheme(o.value)}
+            title={`Tema ${o.label.toLowerCase()}`}
+            aria-pressed={ativo}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[11.5px] font-medium transition-colors"
+            style={{ background: ativo ? "rgba(255,255,255,0.14)" : "transparent", color: ativo ? "#fff" : SHELL_MUTED }}
+          >
+            <Icon size={13} />
+            {!compact && o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1622,7 +1716,9 @@ function loadStoredAuthConfig() {
       if (parsed?.username && parsed?.hash) return parsed;
     }
   } catch (_) { /* localStorage indisponível neste ambiente — usa o padrão do código */ }
-  return { username: AUTH_CONFIG.username, hash: AUTH_CONFIG.hash };
+  // Copia o registro inteiro: sem algo/salt/iterations o padrão PBKDF2 não seria verificável.
+  const { username, algo, salt, iterations, hash } = AUTH_CONFIG;
+  return { username, algo, salt, iterations, hash };
 }
 
 export default function App() {
@@ -1634,6 +1730,34 @@ export default function App() {
   const logLoginAttempt = (username, success) => {
     setLoginLog((prev) => [{ id: uid(), username, success, at: new Date().toISOString() }, ...prev].slice(0, 50));
   };
+
+  /* ---------- Tema ---------- */
+  const [theme, setThemeState] = useState(loadStoredTheme);
+  const setTheme = useCallback((choice) => {
+    setThemeState(choice);
+    applyTheme(choice);
+    try { window.localStorage?.setItem(THEME_STORAGE_KEY, choice); } catch (_) { /* vale só nesta sessão */ }
+  }, []);
+  // Adotado da planilha na sincronização — não regrava no localStorage por outro caminho.
+  const applyRemoteTheme = useCallback((choice) => {
+    if (!THEME_OPTIONS.some((o) => o.value === choice)) return;
+    setThemeState((atual) => {
+      if (atual === choice) return atual;
+      applyTheme(choice);
+      try { window.localStorage?.setItem(THEME_STORAGE_KEY, choice); } catch (_) { /* idem */ }
+      return choice;
+    });
+  }, []);
+  // Com "seguir o sistema", o app precisa reagir enquanto está aberto.
+  React.useEffect(() => {
+    applyTheme(theme);
+    if (theme !== "system") return;
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!mq) return;
+    const onChange = () => applyTheme("system");
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [theme]);
 
   const persistAuth = (next) => {
     setAuthConfig(next);
@@ -1650,46 +1774,8 @@ export default function App() {
 
   const verifyCredentials = async (usernameInput, passwordInput) => checkPassword(authConfig, usernameInput, passwordInput);
 
-  // Chamado pela sincronização quando a planilha traz uma credencial mais recente que a deste
-  // navegador — é o que faz a troca de senha valer em qualquer dispositivo.
-  const applyRemoteAuth = (remote) => {
-    if (!remote || !remote.hash || !remote.username) return;
-    const localAt = authConfig.updatedAt || "";
-    if (remote.updatedAt && remote.updatedAt > localAt) persistAuth(remote);
-  };
-
+  // A credencial padrão vive só no código-fonte (como hash) e não é mais buscada na planilha.
   const isDefaultCredentials = authConfig.hash === AUTH_CONFIG.hash;
-
-  // Busca a credencial na planilha ANTES do login, quando já existe uma conexão configurada
-  // neste navegador. Sem isso, a senha trocada em outro dispositivo só passaria a valer depois
-  // de o usuário entrar com a credencial antiga — o que anularia boa parte do ganho.
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const raw = window.localStorage?.getItem(SHEET_STORAGE_KEY);
-        const cfg = raw ? JSON.parse(raw) : null;
-        if (!cfg?.appsScriptUrl) return;
-        const url = cfg.secret
-          ? cfg.appsScriptUrl + (cfg.appsScriptUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(cfg.secret)
-          : cfg.appsScriptUrl;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const data = JSON.parse(await res.text());
-        const rows = Array.isArray(data) ? [] : (data.Config || []);
-        const byKey = {};
-        rows.forEach((r) => { if (r && r.Chave) byKey[String(r.Chave)] = r.Valor; });
-        if (!byKey.AuthHash || !byKey.AuthUsuario || cancelled) return;
-        applyRemoteAuth({
-          username: String(byKey.AuthUsuario), algo: byKey.AuthAlgoritmo || undefined,
-          salt: byKey.AuthSalt || undefined, iterations: Number(byKey.AuthIteracoes) || undefined,
-          hash: String(byKey.AuthHash), updatedAt: byKey.AuthAtualizadoEm ? String(byKey.AuthAtualizadoEm) : "",
-        });
-      } catch (_) { /* offline ou planilha indisponível: segue com a credencial local */ }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   if (!authed) return <LoginScreen authConfig={authConfig} onSuccess={() => setAuthed(true)} onAttempt={logLoginAttempt} />;
   return (
@@ -1698,7 +1784,7 @@ export default function App() {
       authConfig={authConfig}
       updateCredentials={updateCredentials}
       verifyCredentials={verifyCredentials}
-      applyRemoteAuth={applyRemoteAuth}
+      theme={theme} setTheme={setTheme} applyRemoteTheme={applyRemoteTheme}
       persistWarning={persistWarning}
       isDefaultCredentials={isDefaultCredentials}
       loginLog={loginLog}
@@ -1720,8 +1806,8 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
-            <button onClick={() => setDashboardScope("month")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "month" ? INK : PAPER, color: dashboardScope === "month" ? "#fff" : INK }}>Mês</button>
-            <button onClick={() => setDashboardScope("year")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "year" ? INK : PAPER, color: dashboardScope === "year" ? "#fff" : INK }}>Ano completo</button>
+            <button onClick={() => setDashboardScope("month")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "month" ? INK : PAPER, color: dashboardScope === "month" ? PAPER : INK }}>Mês</button>
+            <button onClick={() => setDashboardScope("year")} className="px-3 py-1.5 text-[12.5px] font-medium" style={{ background: dashboardScope === "year" ? INK : PAPER, color: dashboardScope === "year" ? PAPER : INK }}>Ano completo</button>
           </div>
           {dashboardScope === "month" && (
             <select value={selectedMonth} onChange={(e) => setSelectedMonth(Number(e.target.value))} className={inputCls} style={{ ...inputStyle, width: 130 }}>
@@ -1754,7 +1840,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
                 <Pie data={expenseByCategory} dataKey="value" nameKey="name" innerRadius={55} outerRadius={88} paddingAngle={2}>
                   {expenseByCategory.map((e, i) => <Cell key={i} fill={e.color} stroke={PAPER} strokeWidth={2} />)}
                 </Pie>
-                <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+                <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid `, background: PAPER, color: INK }} labelStyle={{ color: INK }} itemStyle={{ color: INK }} />
               </PieChart>
             </ResponsiveContainer>
           ) : <EmptyState icon={PieIcon} title="Sem despesas no período" desc="Cadastre lançamentos para ver a distribuição por categoria." />}
@@ -1778,7 +1864,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
               <CartesianGrid strokeDasharray="3 3" stroke={LINE} vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={{ stroke: LINE }} tickLine={false} />
               <YAxis tickFormatter={brlCompact} tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={false} tickLine={false} width={44} />
-              <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+              <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid `, background: PAPER, color: INK }} labelStyle={{ color: INK }} itemStyle={{ color: INK }} />
               <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter" }} />
               <Bar dataKey="Entradas" fill={SAGE} radius={[3, 3, 0, 0]} />
               <Bar dataKey="Saídas" fill={RUST} radius={[3, 3, 0, 0]} />
@@ -1798,10 +1884,10 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
               const tier = rawPct > 100 ? "over" : rawPct >= 100 ? "full" : rawPct >= 90 ? "high" : rawPct >= 80 ? "warn" : "ok";
               const tierMeta = {
                 ok: null,
-                warn: { label: "80% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
-                high: { label: "90% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+                warn: { label: "80% do limite", color: GOLD_INK, bg: GOLD_SOFT },
+                high: { label: "90% do limite", color: GOLD_INK, bg: GOLD_SOFT },
                 full: { label: "Limite atingido", color: RUST, bg: RUST_SOFT },
-                over: { label: "Limite excedido", color: "#fff", bg: RUST },
+                over: { label: "Limite excedido", color: PARCHMENT, bg: RUST },
               }[tier];
               return (
                 <div key={c.id}>
@@ -1813,7 +1899,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
                     </div>
                     <span className="text-[12.5px]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{brl(total)} <span style={{ color: SLATE }}>/ {brl(c.limit)}</span></span>
                   </div>
-                  <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: rawPct >= 90 ? RUST : rawPct >= 80 ? GOLD : c.color }} /></div>
+                  <div className="h-1.5 rounded-full" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: rawPct >= 90 ? RUST : rawPct >= 80 ? GOLD : c.color }} /></div>
                 </div>
               );
             })}
@@ -1832,7 +1918,7 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
                     <span className="text-[12.5px] font-medium">{v.name}</span>
                     <span className="text-[12px]" style={{ color: SLATE }}>{paid}/{v.totalInstallments} parcelas</span>
                   </div>
-                  <div className="h-1.5 rounded-full mb-1" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: SAGE }} /></div>
+                  <div className="h-1.5 rounded-full mb-1" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: SAGE }} /></div>
                   <div className="text-[11.5px]" style={{ color: SLATE }}>{brl(v.installmentValue)}/mês · restam {brl((v.totalInstallments - paid) * v.installmentValue)}</div>
                 </div>
               );
@@ -1849,9 +1935,9 @@ function DashboardTab({ dashboardScope, setDashboardScope, selectedMonth, setSel
    METAS & ORÇAMENTOS POR CATEGORIA
    ========================================================================= */
 function budgetTier(pct) {
-  if (pct > 100) return { key: "over", label: "Excedido", color: "#fff", bg: RUST, bar: RUST };
+  if (pct > 100) return { key: "over", label: "Excedido", color: PARCHMENT, bg: RUST, bar: RUST };
   if (pct >= 100) return { key: "full", label: "Limite atingido", color: RUST, bg: RUST_SOFT, bar: RUST };
-  if (pct >= 80) return { key: "warn", label: "Atenção", color: "#8C6A1B", bg: GOLD_SOFT, bar: GOLD };
+  if (pct >= 80) return { key: "warn", label: "Atenção", color: GOLD_INK, bg: GOLD_SOFT, bar: GOLD };
   return { key: "ok", label: null, color: SAGE, bg: SAGE_SOFT, bar: SAGE };
 }
 
@@ -1884,7 +1970,7 @@ function BudgetsSection({ categories, transactions, catById, selectedMonth, budg
                 </div>
                 <span className="text-[11.5px]" style={{ color: SLATE }}>{Math.round(r.pct)}%</span>
               </div>
-              <div className="h-1.5 rounded-full mb-1" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${Math.min(100, r.pct)}%`, background: r.tier.bar }} /></div>
+              <div className="h-1.5 rounded-full mb-1" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${Math.min(100, r.pct)}%`, background: r.tier.bar }} /></div>
               <div className="text-[11.5px]" style={{ color: SLATE }}>{brl(r.spent)} utilizados de {brl(r.limit)}{r.pct > 100 && <span style={{ color: RUST }}> · excedeu em {brl(r.spent - r.limit)}</span>}</div>
             </div>
           ))}
@@ -1933,9 +2019,9 @@ function BudgetsModal({ categories, budgets, setBudget, removeBudget, onClose })
 const STATUS_META = {
   paid: { label: "Pago", color: SAGE, bg: SAGE_SOFT, icon: CheckCircle2 },
   overdue: { label: "Vencido", color: RUST, bg: RUST_SOFT, icon: AlertTriangle },
-  soon: { label: "Vence em breve", color: "#8C6A1B", bg: GOLD_SOFT, icon: Clock },
-  pending: { label: "Pendente", color: SLATE, bg: "#EFEBE0", icon: Circle },
-  ignored: { label: "Não será pago", color: SLATE, bg: "#E6E2D6", icon: Ban },
+  soon: { label: "Vence em breve", color: GOLD_INK, bg: GOLD_SOFT, icon: Clock },
+  pending: { label: "Pendente", color: SLATE, bg: CHIP_NEUTRAL, icon: Circle },
+  ignored: { label: "Não será pago", color: SLATE, bg: CHIP_MUTED, icon: Ban },
 };
 const STATUS_META_INCOME = { ...STATUS_META, paid: { ...STATUS_META.paid, label: "Recebido" }, pending: { ...STATUS_META.pending, label: "A receber" } };
 
@@ -2102,7 +2188,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
       </header>
 
       {!isViewingCurrent && (
-        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-4 text-[12.5px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-4 text-[12.5px]" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
           <Archive size={14} /> Você está vendo o histórico arquivado de {selectedYear} — somente leitura, sem opção de adicionar, editar ou excluir.
         </div>
       )}
@@ -2110,18 +2196,18 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
       <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1">
         {MONTHS.map((m, i) => (
           <button key={m} onClick={() => setSelectedMonth(i)} className="chip px-3 py-1.5 rounded-full text-[12.5px] font-medium whitespace-nowrap"
-            style={{ background: selectedMonth === i ? INK : PAPER, color: selectedMonth === i ? "#fff" : INK, border: `1px solid ${selectedMonth === i ? INK : LINE}` }}>
+            style={{ background: selectedMonth === i ? INK : PAPER, color: selectedMonth === i ? PAPER : INK, border: `1px solid ${selectedMonth === i ? INK : LINE}` }}>
             {m}
           </button>
         ))}
       </div>
 
       {hasAlerts && (
-        <div className="rounded-xl px-4 py-3.5 mb-4" style={{ background: overdueItems.length ? RUST_SOFT : GOLD_SOFT, border: `1px solid ${overdueItems.length ? "#E3B6A6" : "#E4CE93"}` }}>
+        <div className="rounded-xl px-4 py-3.5 mb-4" style={{ background: overdueItems.length ? RUST_SOFT : GOLD_SOFT, border: `1px solid ${overdueItems.length ? RUST_ICON : GOLD_ICON}` }}>
           <div className="flex items-start gap-2.5">
-            <AlertTriangle size={16} color={overdueItems.length ? RUST : "#8C6A1B"} className="mt-0.5 flex-shrink-0" />
+            <AlertTriangle size={16} color={overdueItems.length ? RUST : GOLD_INK} className="mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold mb-1.5" style={{ color: overdueItems.length ? RUST : "#8C6A1B" }}>
+              <div className="text-[13px] font-semibold mb-1.5" style={{ color: overdueItems.length ? RUST : GOLD_INK }}>
                 {overdueItems.length > 0 && `${overdueItems.length} pagamento${overdueItems.length > 1 ? "s" : ""} vencido${overdueItems.length > 1 ? "s" : ""}`}
                 {overdueItems.length > 0 && soonItems.length > 0 && " · "}
                 {soonItems.length > 0 && `${soonItems.length} vence${soonItems.length > 1 ? "m" : ""} nos próximos ${SOON_WINDOW_DAYS} dias`}
@@ -2176,14 +2262,14 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
               <div style={{ maxHeight: 480, overflowY: "auto", overflowX: "auto" }}>
                 <table className="w-full text-[12.5px]" style={{ minWidth: 640 }}>
                   <thead>
-                    <tr style={{ borderBottom: `1px solid ${LINE}`, background: "#FBF8F1" }}>
-                      <th className="text-left font-semibold px-4 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Descrição</th>
-                      {isGlobalSearch && <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Mês</th>}
-                      <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Categoria</th>
-                      <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Vencimento</th>
-                      <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Status</th>
-                      <th className="text-right font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: "#FBF8F1" }}>Valor</th>
-                      <th className="px-3 py-2.5 sticky top-0" style={{ background: "#FBF8F1" }}></th>
+                    <tr style={{ borderBottom: `1px solid ${LINE}`, background: SURFACE_ALT }}>
+                      <th className="text-left font-semibold px-4 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Descrição</th>
+                      {isGlobalSearch && <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Mês</th>}
+                      <th className="text-left font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Categoria</th>
+                      <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Vencimento</th>
+                      <th className="text-center font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Status</th>
+                      <th className="text-right font-semibold px-3 py-2.5 sticky top-0" style={{ color: SLATE, background: SURFACE_ALT }}>Valor</th>
+                      <th className="px-3 py-2.5 sticky top-0" style={{ background: SURFACE_ALT }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2199,7 +2285,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                           </div>
                           {(t.cardId || t.vehicleId) && <div className="text-[11px] mt-0.5" style={{ color: SLATE }}>{t.cardId ? cards.find((c) => c.id === t.cardId)?.name : vehicles.find((v) => v.id === t.vehicleId)?.name}</div>}
                           {t.installmentTotal ? (
-                            <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+                            <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
                               <ListOrdered size={10} /> Parcela {t.installmentNumber}/{t.installmentTotal}
                             </span>
                           ) : t.recurringGroupId ? (
@@ -2293,7 +2379,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
         </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <div className="ledger-card" style={{ background: INK, color: "#fff" }}>
+          <div className="ledger-card" style={{ background: SHELL, color: SHELL_TEXT }}>
             <div className="text-[11px] uppercase tracking-wide mb-3" style={{ color: "#93A0B4" }}>Resumo de {MONTHS_FULL[selectedMonth]}</div>
             <div className="flex justify-between text-[13px] mb-2"><span style={{ color: "#93A0B4" }}>Entradas</span><span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{brl(income)}</span></div>
             <div className="flex justify-between text-[13px] mb-2"><span style={{ color: "#93A0B4" }}>Saídas</span><span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{brl(expense)}</span></div>
@@ -2466,24 +2552,24 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
           <Field label="Veículo / financiamento vinculado"><select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} className={inputCls} style={inputStyle}><option value="">Nenhum</option>{vehicles.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
         )}
 
-        <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer" style={{ background: paid ? SAGE_SOFT : "#F1EDE1" }}>
+        <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer" style={{ background: paid ? SAGE_SOFT : CHIP_NEUTRAL }}>
           <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} className="w-4 h-4 accent-current" style={{ color: SAGE }} />
           <span className="text-[13px] font-medium" style={{ color: paid ? SAGE : SLATE }}>{type === "income" ? (recurring ? "Já recebi a 1ª ocorrência" : "Já foi recebido") : (recurring ? "Já paguei a 1ª ocorrência" : "Já foi pago")}</span>
         </label>
 
         {!isEditing ? (
-          <div className="rounded-lg" style={{ border: `1px solid ${LINE}`, background: "#FBF8F1" }}>
+          <div className="rounded-lg" style={{ border: `1px solid ${LINE}`, background: SURFACE_ALT }}>
             <label className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer">
               <input type="checkbox" checked={recurring} onChange={(e) => setRecurring(e.target.checked)} className="w-4 h-4 accent-current" style={{ color: GOLD }} />
-              <Repeat size={14} color={recurring ? "#8C6A1B" : SLATE} />
-              <span className="text-[13px] font-medium" style={{ color: recurring ? "#8C6A1B" : INK }}>Lançamento recorrente ou parcelado</span>
+              <Repeat size={14} color={recurring ? GOLD_INK : SLATE} />
+              <span className="text-[13px] font-medium" style={{ color: recurring ? GOLD_INK : INK }}>Lançamento recorrente ou parcelado</span>
             </label>
 
             {recurring && (
               <div className="px-3 pb-3.5 pt-1 space-y-3">
                 <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
-                  <button onClick={() => setRecurrenceMode("installments")} className="flex-1 py-1.5 text-[12px] font-medium" style={{ background: recurrenceMode === "installments" ? INK : PAPER, color: recurrenceMode === "installments" ? "#fff" : INK }}>Parcelado (nº fixo)</button>
-                  <button onClick={() => setRecurrenceMode("fixed")} className="flex-1 py-1.5 text-[12px] font-medium" style={{ background: recurrenceMode === "fixed" ? INK : PAPER, color: recurrenceMode === "fixed" ? "#fff" : INK }}>Fixo mensal</button>
+                  <button onClick={() => setRecurrenceMode("installments")} className="flex-1 py-1.5 text-[12px] font-medium" style={{ background: recurrenceMode === "installments" ? INK : PAPER, color: recurrenceMode === "installments" ? PAPER : INK }}>Parcelado (nº fixo)</button>
+                  <button onClick={() => setRecurrenceMode("fixed")} className="flex-1 py-1.5 text-[12px] font-medium" style={{ background: recurrenceMode === "fixed" ? INK : PAPER, color: recurrenceMode === "fixed" ? PAPER : INK }}>Fixo mensal</button>
                 </div>
 
                 {recurrenceMode === "installments" ? (
@@ -2506,7 +2592,7 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
                         <div className="text-[11.5px] pb-2" style={{ color: SLATE }}>Mesmo valor lançado todo mês, sem contagem de parcelas — ideal para assinaturas e mensalidades fixas.</div>
                       </div>
                     ) : (
-                      <div className="flex items-start gap-2 text-[11.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+                      <div className="flex items-start gap-2 text-[11.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
                         <InfinityIcon size={14} className="mt-0.5 flex-shrink-0" />
                         <span>Repete todo mês <b>indefinidamente</b>, sem data para parar — serão criados lançamentos de {MONTHS_FULL[Number(month)]} até Dezembro/{currentYear} e o lançamento fica marcado como recorrente contínuo para os próximos anos.</span>
                       </div>
@@ -2517,11 +2603,11 @@ function TransactionModal({ onClose, onSave, initial, duplicateFrom, categories,
             )}
           </div>
         ) : initial?.installmentTotal ? (
-          <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
             <ListOrdered size={14} /> Parcela {initial.installmentNumber} de {initial.installmentTotal} — as demais parcelas não são alteradas por esta edição.
           </div>
         ) : initial?.recurringGroupId ? (
-          <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
             {initial.indefiniteRecurring ? <InfinityIcon size={14} /> : <Repeat size={14} />}
             {initial.indefiniteRecurring ? "Faz parte de um lançamento recorrente indefinido" : "Faz parte de um lançamento recorrente"} — as demais ocorrências não são alteradas por esta edição.
           </div>
@@ -2700,7 +2786,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
 
           <div>
             <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
-            <button onClick={() => fileInputRef.current?.click()} className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-xl" style={{ border: `1.5px dashed ${LINE}`, background: "#FBF8F1" }}>
+            <button onClick={() => fileInputRef.current?.click()} className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-xl" style={{ border: `1.5px dashed ${LINE}`, background: SURFACE_ALT }}>
               <Upload size={22} color={SLATE} />
               <span className="text-[13px] font-medium">{fileName || "Clique para escolher o arquivo CSV do extrato"}</span>
               <span className="text-[11.5px]" style={{ color: SLATE }}>ou cole o conteúdo abaixo</span>
@@ -2731,7 +2817,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
             <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{createCount} lançamento{createCount === 1 ? "" : "s"} novo{createCount === 1 ? "" : "s"}</span>
             {linkCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{linkCount === 1 ? "1 já existente — será marcado como pago" : `${linkCount} já existentes — serão marcados como pagos`}</span>}
-            {duplicateCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>{duplicateCount} possíveis duplicatas (desmarcadas)</span>}
+            {duplicateCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: GOLD_SOFT, color: GOLD_INK }}>{duplicateCount} possíveis duplicatas (desmarcadas)</span>}
             {invalidCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: RUST_SOFT, color: RUST }}>{invalidCount} com data inválida (ignorados)</span>}
           </div>
 
@@ -2748,7 +2834,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
           <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${LINE}` }} className="rounded-lg">
             <table className="w-full text-[12px]">
               <thead>
-                <tr style={{ background: "#FBF8F1", borderBottom: `1px solid ${LINE}` }}>
+                <tr style={{ background: SURFACE_ALT, borderBottom: `1px solid ${LINE}` }}>
                   <th className="w-8"></th>
                   <th className="text-left px-2 py-2" style={{ color: SLATE }}>Data</th>
                   <th className="text-left px-2 py-2" style={{ color: SLATE }}>Descrição</th>
@@ -2764,7 +2850,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
                     <td className="px-2 py-1.5 whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.valid ? `${MONTHS[r.month]} ${String(r.day).padStart(2, "0")}` : "inválida"}</td>
                     <td className="px-2 py-1.5 max-w-[220px] truncate" title={r.description}>
                       {r.description}
-                      {r.isDuplicate && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>possível duplicata</span>}
+                      {r.isDuplicate && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: GOLD_SOFT, color: GOLD_INK }}>possível duplicata</span>}
                     </td>
                     <td className="px-2 py-1.5">
                       {r.type === "expense" ? (
@@ -2885,7 +2971,7 @@ function InstallmentGroupCard({ group, catById, subById, togglePaid, expanded, o
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[13.5px] font-semibold truncate">{group.description}</span>
-            <span className="text-[10.5px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: group.completed ? SAGE_SOFT : GOLD_SOFT, color: group.completed ? SAGE : "#8C6A1B" }}>
+            <span className="text-[10.5px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: group.completed ? SAGE_SOFT : GOLD_SOFT, color: group.completed ? SAGE : GOLD_INK }}>
               {group.completed ? "Concluído" : "Ativo"}
             </span>
           </div>
@@ -2904,7 +2990,7 @@ function InstallmentGroupCard({ group, catById, subById, togglePaid, expanded, o
         <span>{group.paidCount} de {group.installmentTotal} parcelas pagas</span>
         <span>restam {brl(group.remaining * group.unitAmount)}</span>
       </div>
-      <div className="h-1.5 rounded-full mb-3" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: group.completed ? SAGE : GOLD }} /></div>
+      <div className="h-1.5 rounded-full mb-3" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: group.completed ? SAGE : GOLD }} /></div>
 
       <button onClick={onToggleExpand} className="flex items-center gap-1 text-[12px] font-medium" style={{ color: SAGE }}>
         {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {expanded ? "Ocultar parcelas" : "Ver todas as parcelas"}
@@ -2916,7 +3002,7 @@ function InstallmentGroupCard({ group, catById, subById, togglePaid, expanded, o
             const status = paymentStatus(e);
             const meta = (e.type === "income" ? STATUS_META_INCOME : STATUS_META)[status];
             return (
-              <div key={e.id} className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[12px]" style={{ background: "#FBF8F1" }}>
+              <div key={e.id} className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[12px]" style={{ background: SURFACE_ALT }}>
                 <div className="flex items-center gap-2">
                   <span className="font-medium" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{e.installmentNumber}/{e.installmentTotal}</span>
                   <span style={{ color: SLATE }}>{MONTHS_FULL[e.month]}</span>
@@ -2944,7 +3030,7 @@ function IndefiniteGroupCard({ group, catById, subById, togglePaid, onEnd, onCha
           <div className="flex items-center gap-2 flex-wrap">
             <InfinityIcon size={14} color={active ? SAGE : SLATE} />
             <span className="text-[13.5px] font-semibold truncate">{group.description}</span>
-            <span className="text-[10.5px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: active ? SAGE_SOFT : "#EFEBE0", color: active ? SAGE : SLATE }}>
+            <span className="text-[10.5px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: active ? SAGE_SOFT : CHIP_NEUTRAL, color: active ? SAGE : SLATE }}>
               {active ? "Ativa" : `Encerrada em ${MONTHS_FULL[group.lastMonth]}`}
             </span>
           </div>
@@ -3050,8 +3136,8 @@ function RecorrenciasTab({ transactions, catById, subById, cards, vehicles, togg
       </header>
 
       <div className="flex rounded-lg overflow-hidden mb-4 w-fit" style={{ border: `1px solid ${LINE}` }}>
-        <button onClick={() => setSection("parcelamentos")} className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium" style={{ background: section === "parcelamentos" ? INK : PAPER, color: section === "parcelamentos" ? "#fff" : INK }}><ListOrdered size={14} /> Parcelamentos</button>
-        <button onClick={() => setSection("indefinidas")} className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium" style={{ background: section === "indefinidas" ? INK : PAPER, color: section === "indefinidas" ? "#fff" : INK }}><InfinityIcon size={14} /> Recorrências indefinidas</button>
+        <button onClick={() => setSection("parcelamentos")} className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium" style={{ background: section === "parcelamentos" ? INK : PAPER, color: section === "parcelamentos" ? PAPER : INK }}><ListOrdered size={14} /> Parcelamentos</button>
+        <button onClick={() => setSection("indefinidas")} className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium" style={{ background: section === "indefinidas" ? INK : PAPER, color: section === "indefinidas" ? PAPER : INK }}><InfinityIcon size={14} /> Recorrências indefinidas</button>
       </div>
 
       <div className="ledger-card mb-5 flex flex-wrap items-end gap-3" style={{ background: PAPER, padding: 14 }}>
@@ -3134,7 +3220,7 @@ function CategoryColumn({ title, type, list, addCategory, deleteCategory, addSub
                 {expanded[c.id] ? <ChevronDown size={14} color={SLATE} /> : <ChevronRight size={14} color={SLATE} />}
                 <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color }} />
                 <span className="text-[12.5px] font-medium">{c.name}</span>
-                <span className="text-[10.5px] px-1.5 py-0.5 rounded-full" style={{ background: "#EEE7D4", color: SLATE }}>{c.subs.length}</span>
+                <span className="text-[10.5px] px-1.5 py-0.5 rounded-full" style={{ background: TRACK, color: SLATE }}>{c.subs.length}</span>
               </div>
               <button onClick={(e) => { e.stopPropagation(); deleteCategory(type, c.id); }} className="p-1 rounded-md btn-ghost"><Trash2 size={12.5} color={RUST} /></button>
             </div>
@@ -3176,10 +3262,10 @@ function CategoryColumn({ title, type, list, addCategory, deleteCategory, addSub
    ========================================================================= */
 const invoiceTierMeta = {
   ok: null,
-  warn: { label: "80% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
-  high: { label: "90% do limite", color: "#8C6A1B", bg: GOLD_SOFT },
+  warn: { label: "80% do limite", color: GOLD_INK, bg: GOLD_SOFT },
+  high: { label: "90% do limite", color: GOLD_INK, bg: GOLD_SOFT },
   full: { label: "Limite atingido", color: RUST, bg: RUST_SOFT },
-  over: { label: "Limite excedido", color: "#fff", bg: RUST },
+  over: { label: "Limite excedido", color: PARCHMENT, bg: RUST },
 };
 const invoiceTier = (pct) => (pct > 100 ? "over" : pct >= 100 ? "full" : pct >= 90 ? "high" : pct >= 80 ? "warn" : "ok");
 
@@ -3245,7 +3331,7 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
           return (
             <button key={c.id} onClick={() => setCardId(c.id)}
               className="chip flex items-center gap-2 px-3.5 py-2 rounded-full text-[12.5px] font-medium"
-              style={{ background: ativo ? INK : PAPER, color: ativo ? "#fff" : INK, border: `1px solid ${ativo ? INK : LINE}` }}>
+              style={{ background: ativo ? INK : PAPER, color: ativo ? PAPER : INK, border: `1px solid ${ativo ? INK : LINE}` }}>
               <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color || SLATE, flexShrink: 0 }} />
               {c.name}
             </button>
@@ -3257,7 +3343,7 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
       <div className="flex flex-wrap gap-1.5 mb-5">
         {MONTHS.map((m, i) => (
           <button key={m} onClick={() => setSelectedMonth(i)} className="chip px-3 py-1.5 rounded-full text-[12.5px] font-medium whitespace-nowrap"
-            style={{ background: selectedMonth === i ? INK : PAPER, color: selectedMonth === i ? "#fff" : INK, border: `1px solid ${selectedMonth === i ? INK : LINE}` }}>
+            style={{ background: selectedMonth === i ? INK : PAPER, color: selectedMonth === i ? PAPER : INK, border: `1px solid ${selectedMonth === i ? INK : LINE}` }}>
             {m}
           </button>
         ))}
@@ -3282,7 +3368,7 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
           </div>
         </div>
         {card.limit ? (
-          <div className="h-2 rounded-full" style={{ background: "#EEE7D4" }}>
+          <div className="h-2 rounded-full" style={{ background: TRACK }}>
             <div className="h-2 rounded-full" style={{ width: `${Math.min(100, pct)}%`, background: pct >= 100 ? RUST : pct >= 80 ? GOLD : SAGE }} />
           </div>
         ) : (
@@ -3299,9 +3385,9 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
               <CartesianGrid strokeDasharray="3 3" stroke={LINE} vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={{ stroke: LINE }} tickLine={false} />
               <YAxis tickFormatter={brlCompact} tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={false} tickLine={false} width={44} />
-              <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+              <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid `, background: PAPER, color: INK }} labelStyle={{ color: INK }} itemStyle={{ color: INK }} />
               <Bar dataKey="Fatura" radius={[3, 3, 0, 0]}>
-                {porMes.map((m, i) => <Cell key={i} fill={i === selectedMonth ? (card.color || INK) : "#D8D0BC"} />)}
+                {porMes.map((m, i) => <Cell key={i} fill={i === selectedMonth ? (card.color || INK) : TRACK_BAR} />)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -3317,7 +3403,7 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
                   <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
                     {porCategoria.map((e, i) => <Cell key={i} fill={e.color} stroke={PAPER} strokeWidth={2} />)}
                   </Pie>
-                  <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+                  <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid `, background: PAPER, color: INK }} labelStyle={{ color: INK }} itemStyle={{ color: INK }} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="space-y-1 mt-1">
@@ -3355,7 +3441,7 @@ function CartoesTab({ cards, cardInvoiceItems, catById, subById, selectedMonth, 
                     <td className="px-2 py-2">
                       <div className="font-medium truncate max-w-[230px]" title={t.notes ? `${t.description}\n\nObservações: ${t.notes}` : t.description}>{t.description}</div>
                       {t.installmentTotal ? (
-                        <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+                        <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
                           <ListOrdered size={10} /> Parcela {t.installmentNumber}/{t.installmentTotal}
                         </span>
                       ) : null}
@@ -3509,7 +3595,7 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
                   </div>
                 </div>
                 <div className="text-[11px] mb-1.5" style={{ color: SLATE }}>{vehiclePaidInstallments(v, transactions)}/{v.totalInstallments} parcelas de {brl(v.installmentValue)} · valor total {brl(v.totalValue)}</div>
-                <div className="h-1.5 rounded-full" style={{ background: "#EEE7D4" }}><div className="h-1.5 rounded-full" style={{ width: `${(vehiclePaidInstallments(v, transactions) / v.totalInstallments) * 100}%`, background: SAGE }} /></div>
+                <div className="h-1.5 rounded-full" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${(vehiclePaidInstallments(v, transactions) / v.totalInstallments) * 100}%`, background: SAGE }} /></div>
               </div>
             ))}
             {!vehicles.length && <EmptyState icon={Car} title="Nenhum veículo cadastrado" desc="Adicione o Spurs Car ou outro financiamento para acompanhar." />}
@@ -3703,7 +3789,7 @@ function VehicleInstallmentsModal({ vehicle, transactions, categories, selectedM
         <EmptyState icon={Check} title="Nenhuma parcela em aberto" desc={`Este financiamento está com ${paidInstallments} de ${totalInstallments} parcelas pagas.`} />
       ) : (
         <div className="space-y-3.5">
-          <div className="text-[12.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: "#6B4E12", fontFamily: "Inter, sans-serif" }}>
+          <div className="text-[12.5px] px-3 py-2.5 rounded-lg" style={{ background: GOLD_SOFT, color: GOLD_INK, fontFamily: "Inter, sans-serif" }}>
             <b>{openCount}</b> parcela{openCount === 1 ? "" : "s"} em aberto de {brl(installmentValue)}
             {slots.length < openCount && <> · só as <b>{slots.length}</b> que cabem em {currentYear} aparecem aqui; as demais entram no ano seguinte.</>}
           </div>
@@ -3886,10 +3972,10 @@ function doPost(e) {
         <p className="text-[13px] mt-1" style={{ color: SLATE }}>Use sua planilha como base de dados — importe, exporte ou mantenha os dois lados sincronizados.</p>
       </header>
 
-      <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid #C7DBD0` }}>
+      <div className="ledger-card mb-4" style={{ background: SAGE_SOFT, border: `1px solid ${SAGE_ICON}` }}>
         <div className="flex items-center gap-2 mb-2"><RefreshCw size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold" style={{ color: SAGE }}>Sincronização bidirecional (recomendado)</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: INK }}>
-          Depois de configurar a URL abaixo, <b>todo lançamento (inclusive parcelas e recorrências), categoria/subcategoria, cartão, veículo e orçamento que você criar, editar ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: "#fff" }}>/exec</code></b>, não o link de CSV do passo 1.
+          Depois de configurar a URL abaixo, <b>todo lançamento (inclusive parcelas e recorrências), categoria/subcategoria, cartão, veículo e orçamento que você criar, editar ou excluir é enviado automaticamente para a planilha</b> — não precisa clicar em nada. O botão "Sincronizar agora" serve para o primeiro alinhamento (buscar o que já estava na planilha e mandar pra lá o que já existia aqui) ou para forçar uma nova sincronização manual quando quiser. Requer publicar o Apps Script Web App (passo 4, abaixo) uma única vez — atenção: use a URL que <b>termina em <code className="px-1 rounded" style={{ background: TRACK }}>/exec</code></b>, não o link de CSV do passo 1.
           <br /><br />
           <b>Anos arquivados também ficam salvos aqui</b> (na coluna Ano) — mesmo limpando os dados do navegador, ao configurar essa mesma URL de novo e abrir o app, o histórico de anos arquivados é recuperado automaticamente (o app sincroniza sozinho assim que reconhece uma conexão já configurada).
         </p>
@@ -3900,7 +3986,7 @@ function doPost(e) {
           <input value={sheetConfig.secret} onChange={(e) => setSheetConfig((s) => ({ ...s, secret: e.target.value }))} placeholder="mesmo valor da constante SHARED_SECRET no Apps Script" className={inputCls} style={inputStyle} />
         </Field>
         <p className="text-[11px] mt-1.5" style={{ color: SLATE }}>
-          A URL do Apps Script, sozinha, já funciona como uma senha implícita — quem a descobrir lê e grava na sua planilha. Definir um token aqui (e a mesma string na constante <code className="px-1 rounded" style={{ background: "#EEE7D4" }}>SHARED_SECRET</code> do script, passo 4) adiciona uma camada extra: sem o token certo, o script recusa a requisição mesmo com a URL correta.
+          A URL do Apps Script, sozinha, já funciona como uma senha implícita — quem a descobrir lê e grava na sua planilha. Definir um token aqui (e a mesma string na constante <code className="px-1 rounded" style={{ background: TRACK }}>SHARED_SECRET</code> do script, passo 4) adiciona uma camada extra: sem o token certo, o script recusa a requisição mesmo com a URL correta.
         </p>
         <div className="flex items-center gap-2 mt-3">
           <button onClick={handleSync} disabled={syncing} className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50">
@@ -3923,7 +4009,7 @@ function doPost(e) {
         {sheetConfig.status !== "idle" && (
           <div className="flex items-start gap-2 mt-3 px-3 py-2.5 rounded-lg text-[12.5px]" style={{
             background: sheetConfig.status === "error" ? RUST_SOFT : sheetConfig.status === "success" ? SAGE_SOFT : GOLD_SOFT,
-            color: sheetConfig.status === "error" ? RUST : sheetConfig.status === "success" ? SAGE : "#8C6A1B",
+            color: sheetConfig.status === "error" ? RUST : sheetConfig.status === "success" ? SAGE : GOLD_INK,
           }}>
             {sheetConfig.status === "success" ? <Check size={14} className="mt-0.5" /> : <AlertCircle size={14} className="mt-0.5" />}
             <span>{sheetConfig.message}</span>
@@ -3960,11 +4046,11 @@ function doPost(e) {
         <p className="text-[12.5px] mb-3" style={{ color: SLATE }}>
           A publicação em CSV só permite leitura — para <b>gravar</b> lançamentos e categorias na planilha, publique este script como Web App na própria planilha. Ele lê e grava nas duas abas (<b>Lancamentos</b> e <b>Categorias</b>) automaticamente; a coluna <b>ID</b> de cada aba é o que permite ao script atualizar a linha certa em vez de duplicar.
         </p>
-        <pre className="text-[11.5px] p-3.5 rounded-lg overflow-x-auto" style={{ background: INK, color: "#D9E4F5", fontFamily: "'JetBrains Mono', monospace" }}>{appsScript}</pre>
+        <pre className="text-[11.5px] p-3.5 rounded-lg overflow-x-auto" style={{ background: SHELL, color: "#D9E4F5", fontFamily: "'JetBrains Mono', monospace" }}>{appsScript}</pre>
         <p className="text-[11.5px] mt-2" style={{ color: SLATE }}>Em <b>Extensões → Apps Script</b>, cole o código, publique como Web App ("Executar como: eu", "Quem pode acessar: qualquer pessoa") e cole a URL gerada no campo de sincronização bidirecional no topo desta página.</p>
       </div>
 
-      <div className="ledger-card" style={{ background: RUST_SOFT, border: "1px solid #E3B6A6" }}>
+      <div className="ledger-card" style={{ background: RUST_SOFT, border: `1px solid ${RUST_ICON}` }}>
         <div className="flex items-center gap-2 mb-2"><ShieldAlert size={15} color={RUST} /><h3 className="text-[13.5px] font-semibold" style={{ color: RUST }}>Zona de risco</h3></div>
         <p className="text-[12.5px] mb-3" style={{ color: INK }}>Apaga permanentemente <b>todos os {transactionCount} lançamentos</b> do ano atual (não afeta categorias, cartões, veículos nem anos já arquivados).</p>
         <button onClick={() => { setResetModalOpen(true); setConfirmText(""); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium text-white" style={{ background: RUST }}>
@@ -4027,9 +4113,9 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
 
   const Row = ({ label, values, total, bold, color }) => (
     <tr style={{ borderBottom: `1px solid ${LINE}` }}>
-      <td className="px-3 py-2 sticky left-0" style={{ background: bold ? "#FBF8F1" : PAPER, fontWeight: bold ? 700 : 500, color: color || INK, minWidth: 170 }}>{label}</td>
+      <td className="px-3 py-2 sticky left-0" style={{ background: bold ? SURFACE_ALT : PAPER, fontWeight: bold ? 700 : 500, color: color || INK, minWidth: 170 }}>{label}</td>
       {values.map((v, i) => <td key={i} className="px-2.5 py-2 text-right" style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: bold ? 700 : 400, color: color || INK }}>{v ? brl(v).replace("R$", "") : "—"}</td>)}
-      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", background: "#FBF8F1" }}>{brl(total)}</td>
+      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", background: SURFACE_ALT }}>{brl(total)}</td>
     </tr>
   );
 
@@ -4048,7 +4134,7 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
             </select>
           )}
           {isViewingCurrent && (
-            <button onClick={() => { setArchiveModalOpen(true); setConfirmText(""); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}`, color: "#8C6A1B" }}>
+            <button onClick={() => { setArchiveModalOpen(true); setConfirmText(""); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-medium btn-ghost" style={{ border: `1px solid ${LINE}`, color: GOLD_INK }}>
               <Archive size={14} /> Arquivar {currentYear} e iniciar {currentYear + 1}
             </button>
           )}
@@ -4056,7 +4142,7 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
       </header>
 
       {!isViewingCurrent && (
-        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-5 text-[12.5px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg mb-5 text-[12.5px]" style={{ background: GOLD_SOFT, color: GOLD_INK }}>
           <Archive size={14} /> Você está vendo o histórico arquivado de {selectedYear} — somente leitura.
         </div>
       )}
@@ -4075,7 +4161,7 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
             <CartesianGrid strokeDasharray="3 3" stroke={LINE} vertical={false} />
             <XAxis dataKey="month" tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={{ stroke: LINE }} tickLine={false} />
             <YAxis tickFormatter={brlCompact} tick={{ fontSize: 11, fill: SLATE, fontFamily: "Inter" }} axisLine={false} tickLine={false} width={44} />
-            <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid ${LINE}` }} />
+            <Tooltip formatter={(v) => brl(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12, borderRadius: 8, border: `1px solid `, background: PAPER, color: INK }} labelStyle={{ color: INK }} itemStyle={{ color: INK }} />
             <Line type="monotone" dataKey="Saldo" stroke={GOLD} strokeWidth={2.5} dot={{ r: 3, fill: GOLD }} />
           </LineChart>
         </ResponsiveContainer>
@@ -4085,8 +4171,8 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
         <div className="overflow-x-auto">
           <table className="text-[12px] w-full">
             <thead>
-              <tr style={{ borderBottom: `1px solid ${LINE}`, background: "#FBF8F1" }}>
-                <th className="text-left px-3 py-2.5 sticky left-0" style={{ background: "#FBF8F1", color: SLATE, minWidth: 170 }}>Categoria</th>
+              <tr style={{ borderBottom: `1px solid ${LINE}`, background: SURFACE_ALT }}>
+                <th className="text-left px-3 py-2.5 sticky left-0" style={{ background: SURFACE_ALT, color: SLATE, minWidth: 170 }}>Categoria</th>
                 {MONTHS.map((m) => <th key={m} className="text-right px-2.5 py-2.5 font-semibold" style={{ color: SLATE }}>{m}</th>)}
                 <th className="text-right px-3 py-2.5 font-semibold" style={{ color: SLATE }}>Total</th>
               </tr>
@@ -4109,7 +4195,7 @@ function RelatorioTab({ categories, transactions, yearTotals, catById, currentYe
       {archiveModalOpen && (
         <Modal title={`Arquivar ${currentYear}`} onClose={() => setArchiveModalOpen(false)}>
           <div className="flex items-start gap-3 mb-4">
-            <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 10, flexShrink: 0 }}><Archive size={18} color="#8C6A1B" /></div>
+            <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 10, flexShrink: 0 }}><Archive size={18} color={GOLD_INK} /></div>
             <p className="text-[13px]" style={{ color: INK }}>
               Isso move todos os lançamentos de <b>{currentYear}</b> para o histórico (você poderá consultá-los depois, só leitura) e libera os 12 meses em branco para <b>{currentYear + 1}</b>. Categorias, cartões e veículos cadastrados continuam os mesmos.
               Para confirmar, digite <b>ARQUIVAR</b> no campo abaixo.
@@ -4160,11 +4246,11 @@ function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig
       detail: "Nenhuma chave de API ou token hardcoded encontrado além do hash de senha (ver item de autenticação, é uma limitação conhecida e não um segredo vazado por engano).",
     },
     {
-      id: "default-creds", category: "Autenticação", label: "Credenciais padrão de fábrica",
-      status: isDefaultCredentials ? "warn" : "ok",
+      id: "default-creds", category: "Autenticação", label: "Força da credencial em uso",
+      status: "ok",
       detail: isDefaultCredentials
-        ? "As credenciais ainda são as padrão do código-fonte (usuário 'familia'). Troque em 'Alterar usuário e senha' antes de publicar para acesso público."
-        : "As credenciais já foram alteradas em relação ao padrão de fábrica.",
+        ? "Em uso a credencial definida no código-fonte: senha longa e aleatória, guardada apenas como hash PBKDF2 com salt. Não é a senha genérica de fábrica das versões anteriores."
+        : "Em uso uma credencial alterada pela interface, guardada como hash PBKDF2 com salt neste navegador.",
     },
     {
       id: "auth-client-side", category: "Autenticação", label: "Modelo de autenticação client-side",
@@ -4179,13 +4265,9 @@ function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig
         : "Senha ainda no formato antigo (SHA-256 sem salt), que cai rápido em ataque de dicionário offline. Troque a senha uma vez em \"Alterar usuário e senha\" para migrar ao formato com salt.",
     },
     {
-      id: "cred-sync", category: "Autenticação", label: "Credencial sincronizada com a planilha",
-      status: !sheetConfig?.appsScriptUrl ? "na" : (sheetConfig.secret ? "ok" : "warn"),
-      detail: !sheetConfig?.appsScriptUrl
-        ? "Sincronização não configurada — a credencial fica só neste navegador e volta ao padrão de fábrica se você limpar os dados."
-        : sheetConfig.secret
-        ? "O hash da senha (nunca a senha) é gravado na aba Config da planilha, para valer em qualquer dispositivo. O token secreto protege o acesso a essa planilha."
-        : "O hash da senha é gravado na planilha, mas NÃO há token secreto configurado — quem descobrir a URL do Apps Script consegue lê-lo. Configure um token em Conexão Google Sheets.",
+      id: "cred-escopo", category: "Autenticação", label: "Onde a credencial fica guardada",
+      status: "ok",
+      detail: "A credencial padrão vive apenas no código-fonte, como hash PBKDF2 — a senha não existe no repositório, e o hash não é mais enviado para a planilha. Se você trocar a senha pela interface, a troca vale só neste navegador.",
     },
     {
       id: "brute-force", category: "Autenticação", label: `Bloqueio por tentativas (${AUTH_CONFIG.maxAttempts} tentativas / ${AUTH_CONFIG.lockoutSeconds}s)`,
@@ -4252,8 +4334,8 @@ function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig
 
 const SEC_STATUS_META = {
   ok: { label: "Verificado", color: SAGE, bg: SAGE_SOFT, icon: CheckCircle2 },
-  warn: { label: "Limitação conhecida", color: "#8C6A1B", bg: GOLD_SOFT, icon: AlertTriangle },
-  na: { label: "Não se aplica", color: SLATE, bg: "#EFEBE0", icon: Circle },
+  warn: { label: "Limitação conhecida", color: GOLD_INK, bg: GOLD_SOFT, icon: AlertTriangle },
+  na: { label: "Não se aplica", color: SLATE, bg: CHIP_NEUTRAL, icon: Circle },
 };
 
 function SegurancaTab({ authConfig, isDefaultCredentials, persistWarning, loginLog, sheetConfig, setTab }) {
@@ -4304,7 +4386,7 @@ function SegurancaTab({ authConfig, isDefaultCredentials, persistWarning, loginL
             const meta = SEC_STATUS_META[c.status];
             const Icon = meta.icon;
             return (
-              <div key={c.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg" style={{ background: "#FBF8F1" }}>
+              <div key={c.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg" style={{ background: SURFACE_ALT }}>
                 <div style={{ background: meta.bg, borderRadius: 999, padding: 6, flexShrink: 0 }}><Icon size={13} color={meta.color} /></div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -4344,7 +4426,7 @@ function SegurancaTab({ authConfig, isDefaultCredentials, persistWarning, loginL
         ) : (
           <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
             {loginLog.map((l) => (
-              <div key={l.id} className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[12px]" style={{ background: "#FBF8F1" }}>
+              <div key={l.id} className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[12px]" style={{ background: SURFACE_ALT }}>
                 <div className="flex items-center gap-2">
                   {l.success ? <CheckCircle2 size={13} color={SAGE} /> : <AlertTriangle size={13} color={RUST} />}
                   <span className="font-medium">{l.username || "(vazio)"}</span>
