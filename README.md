@@ -137,6 +137,8 @@ Abra [sheets.google.com](https://sheets.google.com) e crie uma planilha em branc
 
 É nela que fica salvo qual é o "ano corrente" do sistema — sem isso, uma sessão nova (depois de limpar o navegador) não saberia que você já tinha arquivado e avançado de ano.
 
+Esta aba guarda também, nas mesmas três colunas: o **hash da sua senha** (nunca a senha em si — veja a seção Login) e os **feriados da sua cidade** cadastrados no app, um por linha.
+
 **`Cartoes`** (opcional — só necessária se você cadastra cartões de crédito)
 
 | Coluna | Conteúdo |
@@ -183,9 +185,21 @@ Só necessário se você quiser usar a importação simples via CSV (aba "Conex�
 5. Copie a URL gerada (termina em `/exec`) e cole no app, aba "Conexão Google Sheets", campo "URL do Apps Script Web App".
 6. Clique em "Sincronizar agora" uma vez para o primeiro alinhamento. A partir daí, tudo que você criar/editar/excluir no app é enviado automaticamente.
 
+## Vencimentos, dias úteis e feriados
+
+Um lançamento só é marcado como **vencido a partir do dia seguinte** ao vencimento — nunca no próprio dia. E vencimento que cai em sábado, domingo ou feriado passa a valer no próximo dia útil (o app mostra um `*` ao lado do dia, e o motivo aparece ao passar o mouse).
+
+Os **feriados nacionais são calculados automaticamente**, inclusive os que mudam de data todo ano (Carnaval, Sexta-feira Santa e Corpus Christi). Os **feriados da sua cidade ou estado** você cadastra na aba **Categorias & Módulos**, no card "Feriados" — eles são salvos na planilha junto com o resto.
+
 ## Importação de extrato bancário
 
 Na aba Lançamentos, o botão "Importar extrato" abre um assistente que lê um CSV do seu banco (reconhece automaticamente o formato do Nubank — colunas Data, Valor, Identificador, Descrição), mostra uma prévia editável antes de confirmar, detecta duplicatas (por Identificador, se a coluna existir) e permite mapear colunas manualmente para outros formatos de banco.
+
+### Conciliação com o que você já lançou
+
+Se uma linha do extrato bate em **mês, tipo e valor** com uma conta que você já tinha cadastrado e ainda estava pendente, a coluna **"O que fazer"** sugere marcar essa conta como paga em vez de criar um lançamento novo — assim a despesa não é contada duas vezes.
+
+A sugestão nunca é aplicada sozinha: confira linha a linha e troque para "Criar lançamento novo" quando não for o caso. Isso importa porque a comparação é só por valor — se você tem duas contas de R$ 200 no mesmo mês, o app não tem como saber qual é qual, e pode trocá-las. Se isso acontecer, basta escolher o lançamento certo na lista; a outra linha se ajusta sozinha.
 
 ## Para quem vai desenvolver (ou para a IA)
 

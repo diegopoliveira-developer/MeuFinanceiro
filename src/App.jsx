@@ -189,20 +189,84 @@ const dueDateOf = (t) => new Date(t.year || REFERENCE_YEAR_DEFAULT, t.month, t.d
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const TODAY_START = startOfDay(TODAY);
 
-// Vencimento que cai em fim de semana só é cobrável no próximo dia útil: sábado e domingo
-// empurram para a segunda-feira. FERIADOS NÃO SÃO CONSIDERADOS — o sistema não tem calendário
-// de feriados, e os municipais dependem da cidade do usuário (ver Notas/TODO.md).
+const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// Domingo de Páscoa pelo algoritmo de Butcher — é dele que saem os feriados móveis
+// (Carnaval, Sexta-feira Santa e Corpus Christi), que mudam de data todo ano.
+function easterSunday(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+const addDays = (date, days) => { const d = new Date(date); d.setDate(d.getDate() + days); return d; };
+
+// Feriados nacionais brasileiros. Carnaval e Corpus Christi são ponto facultativo federal, não
+// feriado por lei — mas banco não abre, e é a cobrança do boleto que interessa aqui.
+// Feriados ESTADUAIS e MUNICIPAIS não entram: dependem da cidade e são cadastrados pelo usuário.
+const nationalHolidays = (year) => {
+  const easter = easterSunday(year);
+  return {
+    [`${year}-01-01`]: "Confraternização Universal",
+    [isoDate(addDays(easter, -48))]: "Carnaval",
+    [isoDate(addDays(easter, -47))]: "Carnaval",
+    [isoDate(addDays(easter, -2))]: "Sexta-feira Santa",
+    [isoDate(addDays(easter, 60))]: "Corpus Christi",
+    [`${year}-04-21`]: "Tiradentes",
+    [`${year}-05-01`]: "Dia do Trabalho",
+    [`${year}-09-07`]: "Independência",
+    [`${year}-10-12`]: "Nossa Senhora Aparecida",
+    [`${year}-11-02`]: "Finados",
+    [`${year}-11-15`]: "Proclamação da República",
+    [`${year}-11-20`]: "Consciência Negra",
+    [`${year}-12-25`]: "Natal",
+  };
+};
+
+const nationalHolidayCache = {};
+const nationalHolidaysOf = (year) => (nationalHolidayCache[year] = nationalHolidayCache[year] || nationalHolidays(year));
+
+/* Feriados personalizados (municipais/estaduais) cadastrados pelo usuário.
+   Vive no escopo do módulo porque `paymentStatus` é uma função pura chamada de muitos lugares
+   (chip de status, badges, alertas, recorrências) — passar a lista por parâmetro em todos eles
+   espalharia a mesma prop por meia dúzia de componentes sem ganho. O Dashboard mantém este
+   registro em dia a partir do seu próprio estado; ver Conhecimento.md. */
+let CUSTOM_HOLIDAYS = {};
+const setCustomHolidays = (list) => {
+  CUSTOM_HOLIDAYS = {};
+  (list || []).forEach((h) => { if (h && h.date) CUSTOM_HOLIDAYS[h.date] = h.name || "Feriado"; });
+};
+
+const holidayNameOf = (date) => {
+  const key = isoDate(date);
+  return CUSTOM_HOLIDAYS[key] || nationalHolidaysOf(date.getFullYear())[key] || null;
+};
+const isBusinessDay = (date) => date.getDay() !== 0 && date.getDay() !== 6 && !holidayNameOf(date);
+
+// Vencimento que cai em fim de semana ou feriado só é cobrável no próximo dia útil. O laço
+// cobre emendas (ex.: sexta feriado seguida de sábado e domingo cai na segunda).
 const nextBusinessDay = (date) => {
-  const d = new Date(date);
-  const weekday = d.getDay();
-  if (weekday === 6) d.setDate(d.getDate() + 2);
-  else if (weekday === 0) d.setDate(d.getDate() + 1);
+  let d = new Date(date);
+  let guard = 0;
+  while (!isBusinessDay(d) && guard < 30) { d = addDays(d, 1); guard += 1; }
   return d;
 };
 
 // Data em que o pagamento passa a ser de fato exigível.
 const effectiveDueDate = (t) => nextBusinessDay(dueDateOf(t));
-const isDueDateShifted = (t) => effectiveDueDate(t).getDate() !== dueDateOf(t).getDate();
+const isDueDateShifted = (t) => effectiveDueDate(t).getTime() !== startOfDay(dueDateOf(t)).getTime();
+// Por que o vencimento foi empurrado — usado no tooltip da lista.
+const dueShiftReason = (t) => {
+  const original = dueDateOf(t);
+  const holiday = holidayNameOf(original);
+  if (holiday) return holiday;
+  return original.getDay() === 6 ? "sábado" : original.getDay() === 0 ? "domingo" : "";
+};
 
 // Protege contra "injeção de fórmula" no Google Sheets: se um texto do usuário começar com
 // =, +, -, @, tab ou quebra de linha, o Sheets pode interpretá-lo como fórmula ao ser gravado.
@@ -441,6 +505,11 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   const [cards, setCards] = useState(seedCards);
   const [vehicles, setVehicles] = useState(seedVehicles);
   const [transactions, setTransactions] = useState(seedTransactions);
+  // Feriados municipais/estaduais do usuário. Os nacionais são calculados, não cadastrados.
+  const [holidays, setHolidays] = useState([]);
+  // Mantém o registro do módulo em dia ANTES de qualquer filho renderizar — é dele que
+  // paymentStatus() lê para decidir se o vencimento foi empurrado.
+  useMemo(() => setCustomHolidays(holidays), [holidays]);
   const CURRENT_YEAR_STORAGE_KEY = "meufinanceiro_current_year_v1";
   const [currentYear, setCurrentYear] = useState(() => {
     try {
@@ -599,6 +668,28 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     // qual ano está ativo mesmo se o localStorage deste navegador for limpo por completo.
     pushToSheet({ Config: [{ ID: "ano_corrente", Chave: "AnoAtual", Valor: nextYear }] });
   };
+
+  /* ---------- CRUD: feriados personalizados ----------
+     Também vão para a aba "Config" (chave/valor), pelo mesmo motivo da credencial: a aba já
+     existe e o Apps Script já a lê e grava, então nada precisa ser republicado. Uma linha por
+     feriado, com o valor no formato "AAAA-MM-DD|Nome". */
+  const holidayRow = (h) => ({ ID: `feriado_${h.id}`, Chave: "Feriado", Valor: `${h.date}|${h.name}` });
+  const addHoliday = (date, name) => {
+    const clean = { id: uid(), date, name: (name || "").trim() || "Feriado" };
+    setHolidays((prev) => (prev.some((h) => h.date === clean.date) ? prev : [...prev, clean].sort((a, b) => a.date.localeCompare(b.date))));
+    pushToSheet({ Config: [holidayRow(clean)] });
+  };
+  const removeHoliday = (id) => {
+    setHolidays((prev) => prev.filter((h) => h.id !== id));
+    deleteFromSheet("Config", [`feriado_${id}`]);
+  };
+  const holidaysFromConfigRows = (rows) => rows
+    .filter((r) => r && String(r.Chave) === "Feriado" && r.Valor)
+    .map((r) => {
+      const [date, ...rest] = String(r.Valor).split("|");
+      return { id: String(r.ID || "").replace(/^feriado_/, "") || uid(), date: date.trim(), name: rest.join("|").trim() || "Feriado" };
+    })
+    .filter((h) => /^\d{4}-\d{2}-\d{2}$/.test(h.date));
 
   /* ---------- Credencial de acesso na planilha ----------
      Vai para a aba "Config" (chave/valor), que já existe e que o Apps Script já lê e grava —
@@ -928,6 +1019,18 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       if (remoteCurrentYear && remoteCurrentYear > currentYear) setCurrentYear(remoteCurrentYear);
       const effectiveCurrentYear = remoteCurrentYear && remoteCurrentYear > currentYear ? remoteCurrentYear : currentYear;
 
+      // Feriados personalizados: união simples por data — o que só existe de um lado passa a
+      // existir nos dois. São poucos, mudam raramente, e o custo de um conflito é baixo.
+      const remoteHolidays = holidaysFromConfigRows(remoteConfig);
+      setHolidays((prevLocal) => {
+        const byDate = new Map(prevLocal.map((h) => [h.date, h]));
+        remoteHolidays.forEach((h) => { if (!byDate.has(h.date)) byDate.set(h.date, h); });
+        const remoteDates = new Set(remoteHolidays.map((h) => h.date));
+        const toPush = prevLocal.filter((h) => !remoteDates.has(h.date));
+        if (toPush.length) pushToSheet({ Config: toPush.map(holidayRow) });
+        return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+      });
+
       // Credencial de acesso: adota a da planilha se ela for mais recente que a deste
       // navegador; se a local for mais recente (ou a planilha ainda não tiver nenhuma), sobe a
       // local. É o que faz a troca de senha valer em qualquer dispositivo.
@@ -1230,6 +1333,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               cardInvoice={cardInvoice} selectedMonth={selectedMonth}
               transactions={transactions} addTransactionSeries={addTransactionSeries}
               updateTransaction={updateTransaction} currentYear={currentYear}
+              holidays={holidays} addHoliday={addHoliday} removeHoliday={removeHoliday}
             />
           )}
           {tab === "conexao" && (
@@ -1837,9 +1941,11 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
   const [editing, setEditing] = useState(null);
   const [duplicateSeed, setDuplicateSeed] = useState(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
-  // Edição do vencimento direto na lista: { id, value } enquanto o campo está aberto.
+  // Edição direto na lista, sem abrir o modal: { id, value } enquanto o campo está aberto.
   const [editingDueDay, setEditingDueDay] = useState(null);
   const cancelDueDayRef = React.useRef(false);
+  const [editingAmount, setEditingAmount] = useState(null);
+  const cancelAmountRef = React.useRef(false);
   const [filterType, setFilterType] = useState("all");
   const [confirmClear, setConfirmClear] = useState(false);
   const [descQuery, setDescQuery] = useState("");
@@ -1905,6 +2011,23 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
       if (day !== (t.dueDay ?? 10)) updateTransaction(t.id, { dueDay: day });
     }
     setEditingDueDay(null);
+  };
+
+  // Mesma regra do formulário: o tipo (receita/despesa) define o sinal, o valor é sempre > 0.
+  // Uma checagem por "!valor" não pegaria negativo — ver Conhecimento.md.
+  const isAmountValid = (raw) => {
+    const parsed = parseFloat(String(raw).replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0;
+  };
+  const commitAmount = (t) => {
+    if (cancelAmountRef.current) { cancelAmountRef.current = false; setEditingAmount(null); return; }
+    if (!editingAmount || editingAmount.id !== t.id) return;
+    // Valor inválido não é gravado: descarta e mantém o que já estava.
+    if (isAmountValid(editingAmount.value)) {
+      const parsed = parseFloat(String(editingAmount.value).replace(",", "."));
+      if (parsed !== Number(t.amount)) updateTransaction(t.id, { amount: parsed });
+    }
+    setEditingAmount(null);
   };
 
   // O que está marcado como "não será pago" continua listado, mas fora de resumo, subtotais e
@@ -2089,7 +2212,9 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                               className="px-1.5 py-1 rounded-md"
                               style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace", cursor: isViewingCurrent ? "pointer" : "default", background: "transparent", borderBottom: isViewingCurrent ? `1px dashed ${LINE}` : "none" }}
                               title={isViewingCurrent
-                                ? (isDueDateShifted(t) ? `Clique para alterar. Cai em fim de semana — só é cobrável na segunda, dia ${effectiveDueDate(t).getDate()}.` : "Clique para alterar o dia do vencimento")
+                                ? (isDueDateShifted(t)
+                                    ? `Clique para alterar. Cai em ${dueShiftReason(t)} — só é cobrável no dia ${effectiveDueDate(t).getDate()}/${String(effectiveDueDate(t).getMonth() + 1).padStart(2, "0")}.`
+                                    : "Clique para alterar o dia do vencimento")
                                 : undefined}
                             >
                               dia {t.dueDay}{isDueDateShifted(t) ? "*" : ""}
@@ -2098,7 +2223,34 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                         </td>
                         <td className="px-3 py-2.5 text-center"><StatusChip t={t} onClick={isViewingCurrent ? () => togglePaid(t.id) : undefined} /></td>
                         <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: t.type === "income" ? SAGE : RUST }}>
-                          {t.type === "income" ? "+" : "−"} {brl(t.amount)}
+                          {editingAmount?.id === t.id ? (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <input
+                                autoFocus type="number" step="0.01" min="0.01" value={editingAmount.value}
+                                onChange={(e) => setEditingAmount({ id: t.id, value: e.target.value })}
+                                onBlur={() => commitAmount(t)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") e.currentTarget.blur();
+                                  if (e.key === "Escape") { cancelAmountRef.current = true; e.currentTarget.blur(); }
+                                }}
+                                className="w-28 px-1.5 py-1 text-[12.5px] text-right rounded-md outline-none"
+                                style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${isAmountValid(editingAmount.value) ? LINE : RUST}` }}
+                              />
+                              {!isAmountValid(editingAmount.value) && (
+                                <span className="text-[10px] font-normal" style={{ color: RUST, fontFamily: "Inter, sans-serif" }}>Maior que zero</span>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              disabled={!isViewingCurrent}
+                              onClick={() => setEditingAmount({ id: t.id, value: String(t.amount ?? "") })}
+                              className="px-1.5 py-1 rounded-md font-semibold"
+                              style={{ color: "inherit", fontFamily: "'JetBrains Mono', monospace", background: "transparent", cursor: isViewingCurrent ? "pointer" : "default", borderBottom: isViewingCurrent ? `1px dashed ${LINE}` : "none" }}
+                              title={isViewingCurrent ? "Clique para alterar o valor" : undefined}
+                            >
+                              {t.type === "income" ? "+" : "−"} {brl(t.amount)}
+                            </button>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           {isViewingCurrent && (
@@ -2168,7 +2320,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
       {importModalOpen && (
         <ImportStatementModal
           categories={categories} transactions={transactions} currentYear={currentYear}
-          addTransactionSeries={addTransactionSeries}
+          addTransactionSeries={addTransactionSeries} updateTransaction={updateTransaction}
           onClose={() => setImportModalOpen(false)}
         />
       )}
@@ -2392,7 +2544,7 @@ function parseStatementDate(raw) {
   return null;
 }
 
-function ImportStatementModal({ categories, transactions, currentYear, addTransactionSeries, onClose }) {
+function ImportStatementModal({ categories, transactions, currentYear, addTransactionSeries, updateTransaction, onClose }) {
   const [step, setStep] = useState("upload"); // "upload" | "preview"
   const [rawText, setRawText] = useState("");
   const [fileName, setFileName] = useState("");
@@ -2404,6 +2556,19 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
   const fileInputRef = React.useRef(null);
 
   const existingBankIds = useMemo(() => new Set(transactions.filter((t) => t.bankId).map((t) => t.bankId)), [transactions]);
+
+  /* Conciliação: um lançamento já cadastrado que bata em mês, tipo e valor com a linha do
+     extrato provavelmente É essa linha — o usuário já tinha previsto a conta, e o extrato só
+     confirma que ela foi paga. Nesse caso o certo é marcar o lançamento existente como pago,
+     não criar um segundo igual.
+
+     Casar por valor é ambíguo por natureza (duas contas de R$ 150 no mesmo mês são
+     indistinguíveis daqui), então a sugestão NUNCA é aplicada sozinha: cada linha mostra a
+     ação escolhida e o usuário confirma antes de importar. */
+  const candidatesFor = useCallback((row) => transactions.filter((t) =>
+    !t.paid && !t.ignored && t.month === row.month && t.type === row.type &&
+    Math.abs(Number(t.amount || 0) - row.amount) < 0.01
+  ), [transactions]);
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -2448,9 +2613,22 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
         amount: Math.abs(amountRaw), type, bankId: bankId || undefined,
         categoryId: defCat, subId: defSub,
         include: !!d && !isDuplicate, isDuplicate,
+        action: "create", matchId: "",
       };
     }).filter((r) => r.amount > 0 || r.description);
-    setRows(built);
+
+    // Sugere o vínculo: percorre as linhas em ordem e reserva cada lançamento candidato para
+    // uma única linha, para duas parcelas de mesmo valor não apontarem para o mesmo lançamento.
+    const claimed = new Set();
+    const withMatches = built.map((row) => {
+      if (!row.valid || row.isDuplicate) return row;
+      const match = candidatesFor(row).find((t) => !claimed.has(t.id));
+      if (!match) return row;
+      claimed.add(match.id);
+      return { ...row, action: "link", matchId: match.id };
+    });
+
+    setRows(withMatches);
     setStep("preview");
   };
 
@@ -2462,17 +2640,34 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
     setRows((prev) => prev.map((r) => (r.include && r.type === "expense" ? { ...r, categoryId, subId } : r)));
   };
 
+  // Ao escolher um lançamento que já estava reservado por outra linha, a outra linha volta a
+  // "criar novo" — senão corrigir uma sugestão trocada exigiria desfazer a outra antes, e o
+  // caso de duas contas do mesmo valor no mesmo mês é exatamente onde a sugestão erra.
+  const setRowAction = (tempId, action, matchId) => setRows((prev) => prev.map((r) => {
+    if (r.tempId === tempId) return { ...r, action, matchId: action === "link" ? (matchId ?? r.matchId) : "" };
+    if (action === "link" && matchId && r.matchId === matchId) return { ...r, action: "create", matchId: "" };
+    return r;
+  }));
+
   const includedCount = rows.filter((r) => r.include).length;
+  const linkCount = rows.filter((r) => r.include && r.action === "link" && r.matchId).length;
+  const createCount = includedCount - linkCount;
   const duplicateCount = rows.filter((r) => r.isDuplicate).length;
   const invalidCount = rows.filter((r) => !r.valid).length;
 
   const confirmImport = () => {
-    const toImport = rows.filter((r) => r.include).map((r) => ({
+    const included = rows.filter((r) => r.include);
+    const toImport = included.filter((r) => r.action !== "link" || !r.matchId).map((r) => ({
       type: r.type, month: r.month, categoryId: r.categoryId, subId: r.subId,
       description: r.description, amount: r.amount, dueDay: Math.min(31, Math.max(1, r.day)),
       bankId: r.bankId, paid: true, // extrato bancário já reflete o que de fato aconteceu na conta
     }));
     if (toImport.length) addTransactionSeries(toImport);
+    // Vincular = confirmar o pagamento do lançamento que já existia. Guarda também o
+    // identificador do banco, para uma reimportação do mesmo extrato reconhecer a duplicata.
+    included.filter((r) => r.action === "link" && r.matchId).forEach((r) => {
+      updateTransaction(r.matchId, { paid: true, ...(r.bankId ? { bankId: r.bankId } : {}) });
+    });
     onClose();
   };
 
@@ -2516,7 +2711,8 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
       ) : (
         <div className="space-y-3.5">
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
-            <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{includedCount} serão importados</span>
+            <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{createCount} lançamento{createCount === 1 ? "" : "s"} novo{createCount === 1 ? "" : "s"}</span>
+            {linkCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: SAGE_SOFT, color: SAGE }}>{linkCount === 1 ? "1 já existente — será marcado como pago" : `${linkCount} já existentes — serão marcados como pagos`}</span>}
             {duplicateCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>{duplicateCount} possíveis duplicatas (desmarcadas)</span>}
             {invalidCount > 0 && <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: RUST_SOFT, color: RUST }}>{invalidCount} com data inválida (ignorados)</span>}
           </div>
@@ -2539,6 +2735,7 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
                   <th className="text-left px-2 py-2" style={{ color: SLATE }}>Data</th>
                   <th className="text-left px-2 py-2" style={{ color: SLATE }}>Descrição</th>
                   <th className="text-left px-2 py-2" style={{ color: SLATE }}>Categoria</th>
+                  <th className="text-left px-2 py-2" style={{ color: SLATE }}>O que fazer</th>
                   <th className="text-right px-2 py-2" style={{ color: SLATE }}>Valor</th>
                 </tr>
               </thead>
@@ -2560,6 +2757,28 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
                         <span style={{ color: SAGE }}>Receita (Renda Extra)</span>
                       )}
                     </td>
+                    <td className="px-2 py-1.5">
+                      {(() => {
+                        const claimedByOthers = new Set(rows.filter((o) => o.tempId !== r.tempId && o.action === "link" && o.matchId).map((o) => o.matchId));
+                        const options = candidatesFor(r);
+                        if (!options.length) return <span className="text-[11.5px]" style={{ color: SLATE }}>Criar lançamento novo</span>;
+                        return (
+                          <select
+                            value={r.action === "link" && r.matchId ? r.matchId : "create"}
+                            onChange={(e) => (e.target.value === "create" ? setRowAction(r.tempId, "create") : setRowAction(r.tempId, "link", e.target.value))}
+                            className="px-1.5 py-1 text-[11.5px] rounded-md max-w-[210px]"
+                            style={{ ...inputStyle, borderColor: r.action === "link" && r.matchId ? SAGE : LINE }}
+                          >
+                            <option value="create">Criar lançamento novo</option>
+                            {options.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                Marcar como pago: {t.description}{claimedByOthers.has(t.id) ? " (usado em outra linha)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      })()}
+                    </td>
                     <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: r.type === "income" ? SAGE : RUST }}>
                       {r.type === "income" ? "+" : "−"} {brl(r.amount)}
                     </td>
@@ -2569,13 +2788,19 @@ function ImportStatementModal({ categories, transactions, currentYear, addTransa
             </table>
           </div>
 
-          <p className="text-[11px]" style={{ color: SLATE }}>As datas definem o mês de cada lançamento; o ano usado é o ano corrente do sistema ({currentYear}). Lançamentos importados já entram marcados como pagos, já que o extrato reflete o que de fato aconteceu na conta.</p>
+          <p className="text-[11px]" style={{ color: SLATE }}>
+            As datas definem o mês de cada lançamento; o ano usado é o ano corrente do sistema ({currentYear}). Lançamentos importados já entram marcados como pagos, já que o extrato reflete o que de fato aconteceu na conta.
+            Quando o extrato bate em mês, tipo e valor com um lançamento que você já tinha cadastrado, a coluna <b>O que fazer</b> sugere marcá-lo como pago em vez de criar um segundo igual —
+            confira linha a linha antes de importar, porque dois lançamentos do mesmo valor no mesmo mês são indistinguíveis para essa comparação.
+          </p>
 
           <div className="flex justify-between gap-2">
             <button onClick={() => setStep("upload")} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Voltar</button>
             <div className="flex gap-2">
               <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium btn-ghost">Cancelar</button>
-              <button onClick={confirmImport} disabled={!includedCount} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">Importar {includedCount || ""} lançamento{includedCount === 1 ? "" : "s"}</button>
+              <button onClick={confirmImport} disabled={!includedCount} className="btn-primary px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-40">
+                {linkCount && createCount ? `Criar ${createCount} · Conciliar ${linkCount}` : linkCount ? `Conciliar ${linkCount} lançamento${linkCount === 1 ? "" : "s"}` : `Importar ${includedCount || ""} lançamento${includedCount === 1 ? "" : "s"}`}
+              </button>
             </div>
           </div>
         </div>
@@ -2922,7 +3147,71 @@ function CategoryColumn({ title, type, list, addCategory, deleteCategory, addSub
   );
 }
 
-function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory, deleteSubcategory, cards, addCard, updateCard, deleteCard, vehicles, addVehicle, updateVehicle, deleteVehicle, cardInvoice, selectedMonth, transactions, addTransactionSeries, updateTransaction, currentYear }) {
+// Feriados municipais/estaduais. Os nacionais não aparecem aqui para cadastro porque são
+// calculados (inclusive os móveis, que dependem da Páscoa) — só são listados para conferência.
+function HolidaysCard({ holidays, addHoliday, removeHoliday, currentYear }) {
+  const [date, setDate] = useState("");
+  const [name, setName] = useState("");
+  const [showNational, setShowNational] = useState(false);
+  const nacionais = useMemo(() => Object.entries(nationalHolidaysOf(currentYear)).sort((a, b) => a[0].localeCompare(b[0])), [currentYear]);
+  const doAdd = () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    addHoliday(date, name);
+    setDate(""); setName("");
+  };
+  const formatBr = (iso) => iso.split("-").reverse().join("/");
+  return (
+    <div className="ledger-card" style={{ background: PAPER }}>
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <div className="flex items-center gap-2"><Calendar size={15} color={SAGE} /><h3 className="text-[13.5px] font-semibold">Feriados</h3></div>
+      </div>
+      <p className="text-[11.5px] mb-3" style={{ color: SLATE }}>
+        Vencimento que cai em fim de semana ou feriado só é cobrado no próximo dia útil. Os
+        feriados nacionais já são calculados — cadastre aqui só os da sua cidade ou estado.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-[130px_1fr_auto] gap-2 mb-3">
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} style={inputStyle} />
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAdd(); }}
+          placeholder="Ex.: Aniversário da cidade" className={inputCls} style={inputStyle} maxLength={60} />
+        <button onClick={doAdd} disabled={!date} className="btn-primary px-3 rounded-md disabled:opacity-40"><Plus size={14} /></button>
+      </div>
+
+      <div className="space-y-1.5">
+        {holidays.map((h) => (
+          <div key={h.id} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ border: `1px solid ${LINE}` }}>
+            <div className="min-w-0">
+              <div className="text-[12.5px] font-medium truncate">{h.name}</div>
+              <div className="text-[11px]" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>{formatBr(h.date)}</div>
+            </div>
+            <button onClick={() => removeHoliday(h.id)} className="p-1 rounded-md btn-ghost flex-shrink-0"><Trash2 size={12.5} color={RUST} /></button>
+          </div>
+        ))}
+        {!holidays.length && (
+          <div className="text-[12px] px-3 py-2.5 rounded-lg" style={{ background: PARCHMENT, color: SLATE }}>
+            Nenhum feriado próprio cadastrado — só os nacionais estão sendo considerados.
+          </div>
+        )}
+      </div>
+
+      <button onClick={() => setShowNational((v) => !v)} className="flex items-center gap-1 text-[12px] font-medium mt-3 btn-ghost px-2 py-1 rounded-md" style={{ color: SAGE }}>
+        {showNational ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Feriados nacionais de {currentYear} ({nacionais.length})
+      </button>
+      {showNational && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-2">
+          {nacionais.map(([iso, nome]) => (
+            <div key={iso + nome} className="flex items-center justify-between text-[11.5px]" style={{ color: SLATE }}>
+              <span className="truncate">{nome}</span>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{formatBr(iso)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory, deleteSubcategory, cards, addCard, updateCard, deleteCard, vehicles, addVehicle, updateVehicle, deleteVehicle, cardInvoice, selectedMonth, transactions, addTransactionSeries, updateTransaction, currentYear, holidays, addHoliday, removeHoliday }) {
   const [cardModal, setCardModal] = useState(null);
   const [vehicleModal, setVehicleModal] = useState(null);
   const [installmentsFor, setInstallmentsFor] = useState(null);
@@ -2999,6 +3288,8 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
             {!vehicles.length && <EmptyState icon={Car} title="Nenhum veículo cadastrado" desc="Adicione o Spurs Car ou outro financiamento para acompanhar." />}
           </div>
         </div>
+
+        <HolidaysCard holidays={holidays} addHoliday={addHoliday} removeHoliday={removeHoliday} currentYear={currentYear} />
       </div>
 
       {cardModal && <CardModal initial={cardModal.id ? cardModal : null} onClose={() => setCardModal(null)} onSave={(data) => { cardModal.id ? updateCard(cardModal.id, data) : addCard(data); setCardModal(null); }} />}

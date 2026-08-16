@@ -22,8 +22,8 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
 | 4º | **T6** — edição inline do vencimento | ✅ feito e testado |
 | 5º | **T10** — marcar lançamento como "não será pago" | ✅ feito e testado |
 | 6º | **T2** — vincular parcelas em aberto do veículo | ✅ feito e testado |
-| — | **T7** — edição inline do valor | ⏳ pendente. Mesma mecânica da T6, agora que ela existe. |
-| 7º | **T5** — conciliação na importação de extrato | ⏳ pendente. Agora pode se apoiar na T10. |
+| — | **T7** — edição inline do valor | ✅ feito e testado |
+| 7º | **T5** — conciliação na importação de extrato | ✅ feito e testado |
 | 8º | **T4** — dashboard de cartões | ⏳ pendente. Maior de todos, tela nova inteira. |
 | 9º | **T9** — senha sincronizada pela planilha | ✅ feito e testado (opção C, escolhida pelo usuário) |
 
@@ -67,19 +67,34 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       total de compras do mês, lista das compras, gráficos e comparativo entre meses. Usar o
       ciclo real de fatura (`invoicePeriodFor`), não o mês bruto do lançamento — senão a tela
       nova vai discordar do painel de faturas que já existe no Dashboard.
-- [ ] **T5 · Conciliação do extrato com lançamentos existentes.** Na importação, tentar casar
-      cada linha do extrato com um lançamento já cadastrado **do mesmo mês** pelo valor, e
-      apresentar isso numa etapa intermediária onde o usuário confirma ou rejeita cada
-      vínculo. Confirmado o vínculo, o lançamento é marcado como pago em vez de nascer um
-      lançamento novo duplicado. Casar por valor é ambíguo por natureza (dois lançamentos de
-      R$ 150 no mesmo mês) — a confirmação do usuário é obrigatória, nunca automática.
+- [x] **T5 · Conciliação do extrato com lançamentos existentes.** ✅ **2026-08-16.** A prévia da
+      importação ganhou a coluna **"O que fazer"**: linha que bate em mês, tipo e valor com um
+      lançamento pendente já cadastrado sugere "Marcar como pago: <descrição>" em vez de criar
+      um novo; o usuário confirma ou troca para "Criar lançamento novo" linha a linha. Ao
+      conciliar, o lançamento existente é marcado como pago e recebe o `bankId` do extrato —
+      é o que faz a reimportação reconhecê-lo como duplicata. Escolher um lançamento já
+      reservado por outra linha libera a outra automaticamente.
+      **Testado com CSV no formato real do Nubank**: de 4 linhas, 2 casaram com lançamentos
+      existentes ("ENEL" → Conta de luz, "VIVO FIBRA" → Internet) e 2 viraram lançamentos
+      novos; o resultado ficou com 4 lançamentos, não 6, os conciliados mantiveram descrição e
+      categoria originais e passaram a "Pago", e o total do mês somou uma única vez
+      (R$ 334,80). Reimportar o mesmo arquivo detectou as 4 como duplicata, com nada marcado.
+      No caso ambíguo — dois lançamentos de R$ 200 no mesmo mês — a sugestão trocou os dois,
+      como esperado, e a correção pela tela funcionou nos dois sentidos.
 - [x] **T6 · Editar o dia de vencimento direto na lista.** ✅ **2026-08-15.** O vencimento
       virou botão com sublinhado tracejado; clicar abre um campo ali mesmo, já focado. Enter ou
       sair do campo salva, Escape descarta. Desabilitado em ano arquivado, como o resto.
       **Testado**: dia 14 → 27 salvou e o status recalculou sozinho de "Vencido" para
       "Pendente"; Escape depois de digitar outro valor manteve o 27.
-- [ ] **T7 · Editar o valor direto na lista.** Clicar no valor habilita a edição inline.
-      Manter a validação de valor `> 0` (ver `Contextos/Conhecimento.md`).
+- [x] **T7 · Editar o valor direto na lista.** ✅ **2026-08-16.** Mesma mecânica da T6: clicar
+      no valor abre o campo ali mesmo, já focado; Enter ou sair salva, Escape descarta. A
+      validação `> 0` continua valendo — enquanto o valor digitado é inválido, o campo fica com
+      borda vermelha e a legenda "Maior que zero", e sair do campo **descarta** em vez de
+      gravar. Sinal e cor (receita verde `+`, despesa vermelha `−`) preservados.
+      **Testado**: despesa de R$ 250 → R$ 380,50 pela lista, com o resumo do mês acompanhando;
+      `0` e `-50` recusados, mantendo o valor anterior intacto; Escape depois de digitar 999
+      descartou; receita editada para R$ 5.250,75 manteve o `+` e a cor, e o resumo passou a
+      R$ 5.250,75 de entradas contra R$ 380,50 de saídas.
 - [x] **T8 · Corrigir o cálculo de "vencido".** ✅ **2026-08-15.** Hora zerada dos dois lados
       (só é vencido a partir do dia seguinte) e vencimento de fim de semana empurrado para a
       segunda (`nextBusinessDay`). O vencimento deslocado ganha um `*` na lista e um tooltip
@@ -87,10 +102,19 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       **Testado em 15/08/2026, um sábado**: vencimento dia 15 (hoje) → "Vence em breve", não
       "Vencido" — era exatamente o caso errado; dia 14 (sexta, ontem) → "Vencido"; dia 22
       (sábado) → "Pendente", com o tooltip apontando segunda, dia 24.
-- [ ] **T8b · Feriados não são considerados no vencimento.** Só fim de semana. Não existe
-      calendário de feriados no sistema, e os municipais dependem da cidade. **Decisão
-      pendente**: manter só fim de semana, ou acrescentar uma lista de feriados editável pelo
-      usuário. Ver `Contextos/Decisoes.md` para as alternativas já descartadas.
+- [x] **T8b · Feriados no cálculo do vencimento.** ✅ **2026-08-15**, nas duas frentes, porque
+      elas têm naturezas diferentes: os **nacionais são calculados** (inclusive os móveis —
+      Carnaval, Sexta-feira Santa e Corpus Christi saem da Páscoa pelo algoritmo de Butcher) e
+      os **municipais/estaduais são cadastrados pelo usuário**, num card novo na aba Categorias
+      & Módulos. O deslocamento é em laço, então cobre emenda. Os feriados do usuário vão para
+      a aba `Config` da planilha — que já existe, então nada precisa ser republicado no Apps
+      Script. O tooltip do vencimento passou a dizer o motivo pelo nome ("Cai em Independência
+      — só é cobrável no dia 8/09").
+      **Testado**: as 13 datas nacionais de 2026 conferem, e a Páscoa foi validada contra
+      2024–2027; vencimento em 07/09 (segunda-feira, mas Independência) deslocou para 08/09;
+      emenda sábado 12/09 → domingo → feriado municipal na segunda 14/09 → terça 15/09;
+      e o teste que importa — cadastrar um feriado em 14/08 mudou o status do lançamento de
+      "Vencido" para "Vence em breve", e removê-lo devolveu para "Vencido".
 - [x] **T9 · Senha sincronizada pela planilha, com hash reforçado.** ✅ **2026-08-15**, na
       opção C (recomendada), escolhida pelo usuário.
       **Antes**: hash SHA-256 de `usuario:senha` só em `localStorage` — trocar de dispositivo

@@ -307,3 +307,129 @@ sem conexão configurada, ainda entra com a credencial de fábrica (não há com
 consultar a planilha antes de o usuário configurá-la — só proteção na hospedagem
 ou backend resolvem); e o token secreto do Apps Script deixou de ser opcional na
 prática, já que agora o hash da senha fica na planilha.
+
+================================================================================
+DATA: 2026-08-16 00:12:47
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Faça agora o T8 e o T8b.
+
+Agente:
+Apontado ao usuário que a T8 já estava feita e testada na leva anterior (o bug do
+"vencido no próprio dia" e o ajuste de fim de semana); o que seguia em aberto era
+a T8b, feriados. Implementada a T8b.
+
+A T8b estava registrada como decisão pendente entre duas opções — só fim de
+semana, ou lista de feriados editável. Foram feitas as duas, porque as metades do
+problema têm naturezas diferentes: feriado nacional é regra pública e estável,
+que o código sabe calcular (pedir treze datas por ano ao usuário, incluindo as
+móveis, seria trabalho manual desnecessário); feriado municipal é impossível de
+saber daqui, depende da cidade, e só o usuário pode informar. Fazer só uma das
+metades deixaria o cálculo errado de qualquer jeito.
+
+Implementado: algoritmo de Butcher para o Domingo de Páscoa, de onde saem
+Carnaval, Sexta-feira Santa e Corpus Christi; as demais datas nacionais fixas,
+incluindo Consciência Negra; card novo "Feriados" na aba Categorias & Módulos
+para os municipais/estaduais, que também lista os nacionais do ano para
+conferência; deslocamento em laço, para cobrir emenda. Os feriados do usuário vão
+para a aba Config da planilha, pelo mesmo motivo da credencial na sessão
+anterior: a aba já existe e o Apps Script já a lê e grava, então nada precisa ser
+republicado. O tooltip do vencimento passou a dizer o motivo pelo nome.
+
+Decisão de implementação registrada em Conhecimento.md: a lista de feriados
+personalizados vive num registro no escopo do módulo, atualizado pelo Dashboard
+num useMemo (não useEffect, que rodaria tarde demais e faria a primeira pintura
+sair com os feriados antigos), porque paymentStatus() é função pura chamada de
+muitos pontos e passar a lista por prop espalharia a mesma dependência por meia
+dúzia de componentes.
+
+Verificação: a Páscoa foi conferida contra as datas reais de 2024 a 2027 antes de
+qualquer teste de interface. Na interface: as 13 datas nacionais de 2026 aparecem
+corretas, com Carnaval em 16 e 17/02, Sexta-feira Santa em 03/04 e Corpus Christi
+em 04/06; vencimento em 07/09 (segunda-feira útil pelo dia da semana, mas
+Independência) deslocou para 08/09; emenda de sábado 12/09 para terça 15/09,
+pulando o domingo e um feriado municipal cadastrado na segunda; e o teste que de
+fato importa — cadastrar um feriado em 14/08 mudou o status de um lançamento de
+"Vencido" para "Vence em breve", e removê-lo devolveu para "Vencido", provando
+que o feriado alimenta o cálculo e não apenas o texto do tooltip. Console sem
+erros e sem avisos do React.
+
+README atualizado com uma seção sobre vencimento, dia útil e feriados.
+
+================================================================================
+DATA: 2026-08-16 00:58:19
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Faça agora o T7.
+
+Agente:
+T7 implementada: o valor passou a ser editável direto na lista de lançamentos,
+reaproveitando a mecânica da T6 — clicar abre o campo já focado, Enter ou sair
+salva, Escape descarta, e a edição fica desabilitada em ano arquivado.
+
+A diferença em relação à T6 é a validação: valor precisa ser maior que zero (a
+mesma regra do formulário, registrada em Conhecimento.md porque uma checagem por
+"!valor" não pega negativo). Enquanto o valor digitado é inválido, o campo fica
+com borda vermelha e a legenda "Maior que zero"; sair do campo nesse estado
+descarta a alteração em vez de gravar, mantendo o valor anterior.
+
+Testado na interface real: despesa de R$ 250 alterada para R$ 380,50 pela lista,
+com o resumo do mês acompanhando; 0 e -50 recusados, com o valor anterior
+intacto; Escape depois de digitar 999 descartou; receita editada para R$ 5.250,75
+preservou o sinal + e a cor verde, e o resumo passou a R$ 5.250,75 de entradas
+contra R$ 380,50 de saídas. Console sem erros de aplicação e sem avisos do React.
+
+Durante o teste apareceu um falso negativo que vale registro (feito em
+Conhecimento.md): input.blur() só dispara evento se o elemento estiver realmente
+focado, e a aba perde o foco do sistema durante a automação
+(document.hasFocus() === false), então o blur virava no-op e parecia que o campo
+não salvava. O correto ao testar é disparar FocusEvent("focusout", {bubbles:
+true}), que é o evento que o React de fato escuta para onBlur. Nenhum defeito no
+app — o comportamento estava certo desde o início.
+
+================================================================================
+DATA: 2026-08-16 01:47:33
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Faça agora o T5.
+
+Agente:
+T5 implementada: a prévia da importação de extrato ganhou a coluna "O que fazer".
+Quando uma linha do extrato bate em mês, tipo e valor com um lançamento pendente
+já cadastrado, a linha sugere "Marcar como pago: <descrição>" em vez de criar um
+lançamento novo; o usuário confirma ou troca para "Criar lançamento novo" linha a
+linha, como pedido. Ao conciliar, o lançamento existente é marcado como pago e
+recebe o bankId do extrato — é isso que faz a reimportação do mesmo arquivo
+reconhecê-lo como duplicata. Só entram como candidatos lançamentos pendentes e
+não ignorados.
+
+O teste com o caso ambíguo mostrou exatamente o limite que motivou a exigência de
+confirmação do usuário: com dois lançamentos de R$ 200 no mesmo mês, a sugestão
+casou "ACADEMIA SMART FIT" com "Curso do filho" e "CURSO DE INGLES" com
+"Academia" — trocados. Corrigir estava difícil, porque a opção certa não aparecia
+na outra linha (cada lançamento ficava reservado). Ajustado: agora todas as
+opções aparecem, marcadas com "(usado em outra linha)" quando for o caso, e
+escolher uma reservada libera a outra linha automaticamente. Corrigido também um
+erro de texto meu na contagem ("seráão marcados" em vez de "serão marcados").
+
+Verificação na interface real, com CSV no formato do Nubank: de 4 linhas, 2
+casaram com lançamentos existentes (ENEL com Conta de luz, VIVO FIBRA com
+Internet) e 2 viraram lançamentos novos; o resultado ficou com 4 lançamentos e
+não 6, os conciliados mantiveram descrição e categoria originais e passaram a
+"Pago", e o total do mês somou uma única vez (R$ 334,80). Reimportar o mesmo
+arquivo detectou as 4 linhas como duplicata, com nada marcado e o botão
+desabilitado. No caso ambíguo, a correção pela tela funcionou nos dois sentidos e
+os dois lançamentos terminaram pagos, sem duplicar. Console sem erros e sem
+avisos do React.
+
+README atualizado com a seção de conciliação, incluindo o aviso explícito de que
+a comparação é só por valor e pode trocar contas de mesmo valor no mesmo mês.

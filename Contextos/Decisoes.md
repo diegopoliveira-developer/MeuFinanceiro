@@ -295,14 +295,38 @@ comentário da função.
 em que vencia. E boleto que cai em fim de semana só é cobrável no dia útil seguinte, então
 marcar como atrasado antes disso é falso.
 
-**Alternativas rejeitadas**: embutir uma lista de feriados nacionais (não cobre os municipais,
-que dependem da cidade do usuário, e uma lista incompleta dá uma falsa sensação de precisão —
-melhor a ausência declarada); consultar uma API de feriados (dependência externa nova, contra
-o princípio de não adicionar peso para problema pequeno).
+**Alternativas rejeitadas**: consultar uma API de feriados (dependência externa nova, contra o
+princípio de não adicionar peso para problema pequeno).
 
-**Consequência**: um vencimento que cai em feriado ainda aparece como vencido um dia antes do
-correto. Se o usuário quiser resolver, a decisão de qual calendário adotar é dele —
-registrado em `Notas/TODO.md`.
+**Consequência**: resolvida no mesmo dia pela decisão abaixo, que acrescentou os feriados.
+
+---
+
+## 2026-08-15 · Feriados: nacionais calculados, municipais cadastrados pelo usuário
+
+**Decisão**: `nextBusinessDay()` passou a pular feriado além de fim de semana, em laço (cobre
+emenda). Os **feriados nacionais são calculados**, incluindo os móveis — Carnaval, Sexta-feira
+Santa e Corpus Christi saem da Páscoa, obtida pelo algoritmo de Butcher. Os **estaduais e
+municipais são cadastrados pelo usuário**, em um card na aba Categorias & Módulos, e vão para
+a aba `Config` da planilha (uma linha por feriado, valor `AAAA-MM-DD|Nome`).
+
+**Motivo**: as duas metades do problema têm naturezas diferentes. Feriado nacional é regra
+pública e estável: pedir que o usuário digite treze datas por ano seria trabalho manual para
+algo que o código sabe calcular. Feriado municipal é impossível de saber daqui — depende da
+cidade —, então só o usuário pode informar. Fazer só uma das metades deixaria o cálculo errado
+de qualquer forma.
+
+**Alternativas rejeitadas**: só a lista editável (obrigaria o usuário a cadastrar todo ano os
+nacionais, inclusive os móveis, que mudam de data); só os nacionais (deixaria o feriado da
+cidade — o caso mais comum de erro no dia a dia — sem solução); aba nova `Feriados` na planilha
+(exigiria o usuário criar a aba e republicar o Apps Script; a `Config` já existe e já é lida
+e gravada, mesmo motivo da decisão sobre a credencial).
+
+**Consequência**: Carnaval e Corpus Christi entram como feriado embora sejam ponto facultativo
+federal — banco não abre, e é a cobrança do boleto que importa aqui. A lista de feriados
+personalizados vive num registro no escopo do módulo (`CUSTOM_HOLIDAYS`), mantido pelo
+`Dashboard`, porque `paymentStatus()` é função pura chamada de muitos pontos; ver
+`Conhecimento.md`.
 
 ---
 
@@ -361,6 +385,33 @@ de que o login é trava client-side. E há um limite que o usuário precisa conh
 tem como consultar a planilha antes de o usuário configurá-la. O token secreto do Apps Script
 deixou de ser opcional na prática — sem ele, a URL sozinha dá acesso ao hash —, e a tela de
 Diagnóstico passa a alertar quando a sincronização está ativa sem token.
+
+---
+
+## 2026-08-16 · Extrato: conciliar com o que já existe, sempre com confirmação
+
+**Decisão**: na prévia da importação de extrato, cada linha que bate em **mês, tipo e valor**
+com um lançamento pendente já cadastrado passa a sugerir "marcar como pago" em vez de criar um
+lançamento novo. A sugestão é só sugestão: uma coluna "O que fazer" mostra a escolha e o
+usuário confirma linha a linha. Confirmar o vínculo marca o lançamento existente como pago e
+grava nele o `bankId` do extrato.
+
+**Motivo**: a conta já estava prevista no sistema; o extrato só confirma que ela foi paga.
+Criar um segundo lançamento dobraria a despesa no mês — o oposto do que o usuário quer ao
+importar. Gravar o `bankId` no lançamento conciliado é o que faz a reimportação do mesmo
+extrato reconhecê-lo como duplicata.
+
+**Alternativas rejeitadas**: aplicar o vínculo automaticamente, sem confirmação (casar por
+valor é ambíguo por construção — duas contas de R$ 200 no mesmo mês são indistinguíveis daqui,
+e o teste real mostrou a sugestão trocando as duas); casar também por descrição (o texto do
+extrato quase nunca parece com o do usuário: "Debito automatico VIVO FIBRA" contra "Internet");
+casar por data exata (o pagamento raramente cai no dia do vencimento cadastrado).
+
+**Consequência**: a sugestão erra em caso de empate de valor, e isso é esperado — por isso a
+tela permite corrigir. Escolher um lançamento já reservado por outra linha **libera a outra
+linha** automaticamente (ela volta a "criar novo"); sem isso, desfazer uma sugestão trocada
+exigiria dois passos. Só lançamentos **pendentes e não ignorados** são candidatos: o que já
+está pago não precisa de conciliação.
 
 ---
 

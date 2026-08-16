@@ -63,6 +63,30 @@ lançamento aparecia como vencido no dia em que vencia. Custou um relato de bug 
 **Solução**: `startOfDay()` nos dois lados e `Math.round` na diferença. Vale para qualquer
 comparação de data neste projeto: zere a hora antes.
 
+### Os feriados personalizados vivem num registro do módulo, não em props
+
+`paymentStatus()` é função pura chamada do chip de status, dos badges, dos alertas do mês e
+das recorrências. Para ela enxergar os feriados cadastrados pelo usuário sem espalhar a mesma
+prop por meia dúzia de componentes, a lista fica em `CUSTOM_HOLIDAYS`, no escopo do módulo,
+atualizada pelo `Dashboard` num `useMemo` — que roda **antes** de qualquer filho renderizar.
+
+**Cuidado**: `useEffect` não serviria aqui, porque roda depois da renderização e a primeira
+pintura sairia com os feriados antigos. Se for mexer nisso, mantenha a atualização síncrona.
+
+**Feriados nacionais**, esses, são calculados (`nationalHolidaysOf`) e ficam em cache por ano —
+não passam pelo registro.
+
+### Testar edição inline no navegador exige disparar `focusout`, não `blur()`
+
+Ao exercitar os campos de edição da lista (vencimento e valor) por script, `input.blur()` só
+dispara evento se o elemento estiver de fato focado — e a aba perde o foco do sistema
+operacional durante a automação (`document.hasFocus() === false`), então o `blur()` vira
+no-op e o `onBlur` nunca roda. O sintoma engana: parece que o campo "não salva".
+
+**Solução**: disparar `new FocusEvent("focusout", { bubbles: true })` — é o evento que o React
+realmente escuta para `onBlur`, e ele borbulha até a raiz onde o React delega. Vale para
+qualquer teste de campo que confirme ao sair.
+
 ### Um erro de render derruba o app inteiro
 
 Não existe *error boundary*. Exceção não tratada durante o render leva a tela em branco, sem
