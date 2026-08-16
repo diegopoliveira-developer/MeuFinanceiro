@@ -42,6 +42,14 @@ main.jsx            monta <App /> em #root, dentro de <React.StrictMode>
   sem registrar a decisão em [`Decisoes.md`](Decisoes.md).
 - **Toda mutação de domínio nasce no `Dashboard`.** Uma aba nunca escreve estado direto:
   chama o callback que o `Dashboard` passou.
+- **Toda soma financeira parte de `activeTransactions`, nunca de `transactions`.** O segundo
+  inclui os lançamentos marcados como "não será pago", que existem para aparecer na lista e
+  ficar fora de KPI, gráfico, subtotal, orçamento, fatura, relatório e contagem de pendência.
+  Listar usa `transactions`; somar usa `activeTransactions` — errar isso produz total errado
+  em silêncio.
+- **Status de vencimento só se calcula por `paymentStatus()`.** Ela já zera a hora dos dois
+  lados e empurra o vencimento de fim de semana para o próximo dia útil. Nunca comparar
+  `dueDateOf()` com `new Date()` na mão.
 - **Toda operação de CRUD que altera dado sincronizável precisa empurrar para a planilha**
   no mesmo ponto em que altera o estado (`pushToSheet` / `deleteFromSheet`). Alterar estado
   sem empurrar cria divergência silenciosa entre app e planilha — é bug, não omissão.

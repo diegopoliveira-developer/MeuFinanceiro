@@ -283,6 +283,87 @@ mês.
 
 ---
 
+## 2026-08-15 · "Vencido" respeita o dia do vencimento e o dia útil — mas não feriados
+
+**Decisão**: `paymentStatus()` compara as duas datas com a hora zerada e só considera vencido
+a partir do dia **seguinte** ao vencimento; vencimento em sábado ou domingo é empurrado para a
+segunda-feira (`nextBusinessDay`). **Feriados não são considerados**, e isso está escrito no
+comentário da função.
+
+**Motivo**: havia um bug real — a data de vencimento nasce à meia-noite e era comparada com um
+`TODAY` que carrega a hora do dia, então todo lançamento aparecia como vencido no próprio dia
+em que vencia. E boleto que cai em fim de semana só é cobrável no dia útil seguinte, então
+marcar como atrasado antes disso é falso.
+
+**Alternativas rejeitadas**: embutir uma lista de feriados nacionais (não cobre os municipais,
+que dependem da cidade do usuário, e uma lista incompleta dá uma falsa sensação de precisão —
+melhor a ausência declarada); consultar uma API de feriados (dependência externa nova, contra
+o princípio de não adicionar peso para problema pequeno).
+
+**Consequência**: um vencimento que cai em feriado ainda aparece como vencido um dia antes do
+correto. Se o usuário quiser resolver, a decisão de qual calendário adotar é dele —
+registrado em `Notas/TODO.md`.
+
+---
+
+## 2026-08-15 · "Não será pago" é um estado, e sai de todas as somas
+
+**Decisão**: lançamento pode ser marcado como ignorado (`ignored`), o que o mantém visível na
+lista — riscado e esmaecido — e o remove de **todo** cálculo financeiro: KPIs, gráficos,
+subtotais do mês, orçamentos, faturas de cartão, relatório anual e contagem de pendências. Um
+único ponto de filtro, `activeTransactions`, alimenta todas as somas. Persistido na planilha
+em uma coluna nova, `Ignorado`.
+
+**Motivo**: o usuário precisava cancelar uma conta sem perder o registro dela. Excluir apaga o
+histórico; deixar como pendente para sempre polui alerta, orçamento e saldo. Se o lançamento
+não vai ser pago, mantê-lo em qualquer soma torna o saldo do mês errado — meia solução seria
+pior que nenhuma.
+
+**Alternativas rejeitadas**: reaproveitar `paid` com uma observação (mentiria dizendo que foi
+pago, e entraria nas despesas do mês); esconder o lançamento da lista (viraria uma exclusão
+disfarçada, sem o histórico que era o ponto do pedido).
+
+**Consequência**: marcar como pago limpa o `ignored` e vice-versa — são estados mutuamente
+exclusivos. Qualquer cálculo novo precisa partir de `activeTransactions`; a regra está em
+`Convencoes.md`, seção 2. A coluna `Ignorado` é aditiva: planilha antiga sem ela continua
+funcionando, e o valor ausente é lido como "não ignorado".
+
+---
+
+## 2026-08-15 · Credencial vai para a planilha, com hash PBKDF2 e salt
+
+**Decisão**: a senha passa a ser guardada como **PBKDF2-HMAC-SHA256, salt aleatório de 16
+bytes, 210.000 iterações** (recomendação OWASP), e o registro — usuário, algoritmo, salt,
+iterações, hash e data de atualização — é gravado na aba `Config` da planilha, além do
+`localStorage`. A tela de login busca esse registro na planilha **antes** de autenticar,
+quando já existe conexão configurada neste navegador. O formato antigo (SHA-256 de
+`usuario:senha`, sem salt) continua sendo aceito na verificação, e é substituído na primeira
+troca de senha.
+
+**Motivo**: o problema relatado pelo usuário era real — a troca de senha vivia só no
+navegador, então mudar de dispositivo ou limpar os dados devolvia a credencial ao padrão de
+fábrica. Levar o hash para a planilha resolve isso, **mas expõe o hash a quem obtiver a URL do
+Apps Script** — por isso ele precisou ficar caro de atacar offline antes de sair daqui.
+SHA-256 sem salt cai em ataque de dicionário em segundos; PBKDF2 com 210k iterações, não.
+Usar a aba `Config`, que já existe e que o Apps Script já lê e grava, evitou obrigar o usuário
+a criar aba nova e republicar o script.
+
+**Alternativas rejeitadas**: gravar o SHA-256 atual na planilha (sincronizava, mas entregava um
+hash barato de quebrar); manter tudo só no navegador (não resolvia o problema relatado);
+proteção por senha na hospedagem, ex.: Vercel Password Protection (é a única barreira de
+verdade, mas exige plano pago e migrar o deploy do Firebase — segue disponível se o usuário
+quiser); PBKDF2 em JS puro para o caso de a Web Crypto faltar (lento demais; onde ela não
+existe, cai para o formato antigo e a tela de Diagnóstico avisa).
+
+**Consequência**: **isto continua não sendo autenticação de verdade** — segue valendo a decisão
+de que o login é trava client-side. E há um limite que o usuário precisa conhecer: um navegador
+**novo, sem conexão configurada**, ainda entra com a credencial padrão de fábrica, porque não
+tem como consultar a planilha antes de o usuário configurá-la. O token secreto do Apps Script
+deixou de ser opcional na prática — sem ele, a URL sozinha dá acesso ao hash —, e a tela de
+Diagnóstico passa a alertar quando a sincronização está ativa sem token.
+
+---
+
 ## 2026-08-15 · Adoção do padrão de contexto do `Basic AI Project Rules.md`
 
 **Decisão**: o antigo `Contextos/CONTEXT.md` — arquivo único que acumulava escopo, arquitetura,

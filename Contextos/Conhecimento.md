@@ -54,6 +54,15 @@ A validação antiga do campo de valor usava `!amount`. Como o campo é string, 
 
 **Solução**: comparação explícita `> 0`. Vale para qualquer campo numérico novo.
 
+### Comparar data de vencimento com `new Date()` marca o próprio dia como atrasado
+
+`dueDateOf()` devolve a data à **meia-noite**; `new Date()` carrega a hora atual. Subtrair um
+do outro no dia do vencimento dá algo entre −1 e 0, e o `Math.floor` levava para −1 — o
+lançamento aparecia como vencido no dia em que vencia. Custou um relato de bug do usuário.
+
+**Solução**: `startOfDay()` nos dois lados e `Math.round` na diferença. Vale para qualquer
+comparação de data neste projeto: zere a hora antes.
+
 ### Um erro de render derruba o app inteiro
 
 Não existe *error boundary*. Exceção não tratada durante o render leva a tela em branco, sem

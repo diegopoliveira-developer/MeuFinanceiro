@@ -113,6 +113,7 @@ Abra [sheets.google.com](https://sheets.google.com) e crie uma planilha em branc
 | RecorrenciaGrupoId | id que agrupa parcelas/recorrências |
 | RecorrenciaIndefinida | Sim se for recorrência sem data de término |
 | BankId | identificador da transação bancária (importação de extrato) |
+| Ignorado | `Sim` se o lançamento foi marcado como "não será pago" (fica no histórico, fora de todas as somas) |
 
 **`Categorias`** (obrigatória)
 

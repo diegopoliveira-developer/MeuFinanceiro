@@ -127,7 +127,82 @@ async function sha256Hex(text) {
   return sha256HexFallback(text);
 }
 
+/* -------------------------------------------------------------------------
+   HASH DE SENHA — PBKDF2 com salt
+   -------------------------------------------------------------------------
+   A credencial sai deste navegador: ela é gravada na planilha do usuário para
+   valer em qualquer dispositivo. Isso significa que quem obtiver a URL do Apps
+   Script vê o hash — então ele precisa ser CARO de atacar offline. SHA-256
+   simples (o formato antigo, sem salt) cai em ataque de dicionário em segundos.
+
+   PBKDF2-HMAC-SHA256, salt aleatório por credencial, 210.000 iterações
+   (recomendação OWASP para PBKDF2-SHA256). Isso NÃO transforma o login em
+   autenticação de verdade — continua sendo trava client-side, como registrado
+   em Decisoes.md; só encarece o ataque a quem puser as mãos no hash.
+   ------------------------------------------------------------------------- */
+const PBKDF2_ITERATIONS = 210000;
+const AUTH_ALGO_PBKDF2 = "pbkdf2-sha256";
+// Chave da conexão com a planilha. No escopo do módulo porque tanto o Dashboard quanto a tela
+// de login precisam dela — o login lê a conexão para buscar a credencial mais recente.
+const SHEET_STORAGE_KEY = "meufinanceiro_sheet_v1";
+
+const bytesToHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const hexToBytes = (hex) => new Uint8Array((String(hex).match(/.{1,2}/g) || []).map((b) => parseInt(b, 16)));
+
+const canUsePbkdf2 = () => !!window.crypto?.subtle && !!window.crypto?.getRandomValues;
+
+async function pbkdf2Hex(password, saltBytes, iterations) {
+  const key = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await window.crypto.subtle.deriveBits({ name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" }, key, 256);
+  return bytesToHex(bits);
+}
+
+// Gera o registro de credencial no formato forte. Onde a Web Crypto não existe (ambiente de
+// sandbox que a restringe), cai para o formato antigo em vez de travar o app — a limitação
+// aparece na tela de Diagnóstico de Segurança.
+async function buildAuthRecord(username, password) {
+  const user = username.trim();
+  if (canUsePbkdf2()) {
+    const salt = window.crypto.getRandomValues(new Uint8Array(16));
+    const hash = await pbkdf2Hex(password, salt, PBKDF2_ITERATIONS);
+    return { username: user, algo: AUTH_ALGO_PBKDF2, salt: bytesToHex(salt), iterations: PBKDF2_ITERATIONS, hash, updatedAt: new Date().toISOString() };
+  }
+  return { username: user, hash: await sha256Hex(`${user}:${password}`), updatedAt: new Date().toISOString() };
+}
+
+// Confere a senha nos dois formatos: o novo (com salt) e o antigo (SHA-256 de "usuario:senha"),
+// que continua valendo para quem ainda não trocou a senha desde esta versão.
+async function checkPassword(record, username, password) {
+  if (!record) return false;
+  if (record.algo === AUTH_ALGO_PBKDF2) {
+    if (!canUsePbkdf2()) return false;
+    const hash = await pbkdf2Hex(password, hexToBytes(record.salt), Number(record.iterations) || PBKDF2_ITERATIONS);
+    return hash === record.hash && username.trim() === record.username;
+  }
+  return (await sha256Hex(`${username.trim()}:${password}`)) === record.hash;
+}
+
 const dueDateOf = (t) => new Date(t.year || REFERENCE_YEAR_DEFAULT, t.month, t.dueDay || 10);
+
+// Zera a hora: comparar uma data à meia-noite com um "agora" que carrega hora do dia faz o
+// próprio dia do vencimento parecer atrasado.
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const TODAY_START = startOfDay(TODAY);
+
+// Vencimento que cai em fim de semana só é cobrável no próximo dia útil: sábado e domingo
+// empurram para a segunda-feira. FERIADOS NÃO SÃO CONSIDERADOS — o sistema não tem calendário
+// de feriados, e os municipais dependem da cidade do usuário (ver Notas/TODO.md).
+const nextBusinessDay = (date) => {
+  const d = new Date(date);
+  const weekday = d.getDay();
+  if (weekday === 6) d.setDate(d.getDate() + 2);
+  else if (weekday === 0) d.setDate(d.getDate() + 1);
+  return d;
+};
+
+// Data em que o pagamento passa a ser de fato exigível.
+const effectiveDueDate = (t) => nextBusinessDay(dueDateOf(t));
+const isDueDateShifted = (t) => effectiveDueDate(t).getDate() !== dueDateOf(t).getDate();
 
 // Protege contra "injeção de fórmula" no Google Sheets: se um texto do usuário começar com
 // =, +, -, @, tab ou quebra de linha, o Sheets pode interpretá-lo como fórmula ao ser gravado.
@@ -151,11 +226,14 @@ const vehiclePaidInstallments = (vehicle, transactions) => {
   return total > 0 ? Math.min(total, paid) : paid;
 };
 
-// "paid" | "overdue" | "soon" | "pending"
+// "ignored" | "paid" | "overdue" | "soon" | "pending"
 function paymentStatus(t) {
+  if (t.ignored) return "ignored";
   if (t.paid) return "paid";
-  const due = dueDateOf(t);
-  const diffDays = Math.floor((due - TODAY) / (1000 * 60 * 60 * 24));
+  // Ambos os lados à meia-noite, e o vencimento já ajustado para o próximo dia útil: só é
+  // "vencido" a partir do dia SEGUINTE ao vencimento efetivo, nunca no próprio dia.
+  const due = startOfDay(effectiveDueDate(t));
+  const diffDays = Math.round((due - TODAY_START) / (1000 * 60 * 60 * 24));
   if (diffDays < 0) return "overdue";
   if (diffDays <= SOON_WINDOW_DAYS) return "soon";
   return "pending";
@@ -355,7 +433,7 @@ function EmptyState({ icon: Icon, title, desc }) {
 /* =========================================================================
    MAIN APP
    ========================================================================= */
-function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, persistWarning, isDefaultCredentials, loginLog }) {
+function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials, applyRemoteAuth, persistWarning, isDefaultCredentials, loginLog }) {
   const [tab, setTab] = useState("dashboard");
   const [credentialsModalOpen, setCredentialsModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -377,7 +455,6 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   const [archivedYears, setArchivedYears] = useState({}); // { [year]: transactions[] }
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH_IDX);
   const [dashboardScope, setDashboardScope] = useState("month"); // "month" | "year"
-  const SHEET_STORAGE_KEY = "meufinanceiro_sheet_v1";
   const loadStoredSheetConfig = () => {
     try {
       const raw = window.localStorage?.getItem(SHEET_STORAGE_KEY);
@@ -466,7 +543,18 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   };
   const togglePaid = (id) => {
     setTransactions((prev) => {
-      const next = prev.map((t) => (t.id === id ? { ...t, paid: !t.paid } : t));
+      // Voltar a cobrar um lançamento ignorado: marcar como pago sai do estado "não será pago".
+      const next = prev.map((t) => (t.id === id ? { ...t, paid: !t.paid, ignored: false } : t));
+      const updated = next.find((t) => t.id === id);
+      if (updated) pushToSheet({ Lancamentos: [toSheetRow(updated)] });
+      return next;
+    });
+  };
+  // "Não será pago": mantém o lançamento no histórico, mas fora de qualquer soma, pendência
+  // ou orçamento — é o meio-termo entre pagar e excluir.
+  const toggleIgnored = (id) => {
+    setTransactions((prev) => {
+      const next = prev.map((t) => (t.id === id ? { ...t, ignored: !t.ignored, paid: t.ignored ? t.paid : false } : t));
       const updated = next.find((t) => t.id === id);
       if (updated) pushToSheet({ Lancamentos: [toSheetRow(updated)] });
       return next;
@@ -510,6 +598,31 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     // Guarda o ano corrente também na planilha (aba "Config") — é o que permite recuperar
     // qual ano está ativo mesmo se o localStorage deste navegador for limpo por completo.
     pushToSheet({ Config: [{ ID: "ano_corrente", Chave: "AnoAtual", Valor: nextYear }] });
+  };
+
+  /* ---------- Credencial de acesso na planilha ----------
+     Vai para a aba "Config" (chave/valor), que já existe e que o Apps Script já lê e grava —
+     assim o usuário não precisa criar aba nem republicar o script. O que sobe é o hash com
+     salt, nunca a senha: ver o bloco de PBKDF2 no topo do arquivo e Decisoes.md. */
+  const AUTH_CONFIG_ROWS = [
+    ["auth_usuario", "AuthUsuario", "username"], ["auth_algoritmo", "AuthAlgoritmo", "algo"],
+    ["auth_salt", "AuthSalt", "salt"], ["auth_iteracoes", "AuthIteracoes", "iterations"],
+    ["auth_hash", "AuthHash", "hash"], ["auth_atualizado_em", "AuthAtualizadoEm", "updatedAt"],
+  ];
+  const pushCredentialsToSheet = async (newUsername, newPassword) => {
+    const record = await updateCredentials(newUsername, newPassword);
+    pushToSheet({ Config: AUTH_CONFIG_ROWS.map(([id, chave, campo]) => ({ ID: id, Chave: chave, Valor: record[campo] ?? "" })) });
+    return record;
+  };
+  const authRecordFromConfigRows = (rows) => {
+    const byKey = {};
+    rows.forEach((r) => { if (r && r.Chave) byKey[String(r.Chave)] = r.Valor; });
+    if (!byKey.AuthHash || !byKey.AuthUsuario) return null;
+    return {
+      username: String(byKey.AuthUsuario), algo: byKey.AuthAlgoritmo || undefined,
+      salt: byKey.AuthSalt || undefined, iterations: Number(byKey.AuthIteracoes) || undefined,
+      hash: String(byKey.AuthHash), updatedAt: byKey.AuthAtualizadoEm ? String(byKey.AuthAtualizadoEm) : "",
+    };
   };
 
   /* ---------- CRUD: categories ---------- */
@@ -596,11 +709,16 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   };
 
   /* ---------- Computations ---------- */
+  // Lançamento marcado como "não será pago" continua na lista, mas fica FORA de todo cálculo
+  // financeiro: KPIs, gráficos, subtotais, orçamentos, faturas, relatório e pendências.
+  // Toda soma parte daqui; a lista de lançamentos, essa sim, usa `transactions` inteiro.
+  const activeTransactions = useMemo(() => transactions.filter((t) => !t.ignored), [transactions]);
+
   const monthTotals = useCallback((m) => {
-    const inc = transactions.filter((t) => t.month === m && t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0);
-    const exp = transactions.filter((t) => t.month === m && t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
+    const inc = activeTransactions.filter((t) => t.month === m && t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0);
+    const exp = activeTransactions.filter((t) => t.month === m && t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
     return { income: inc, expense: exp, balance: inc - exp };
-  }, [transactions]);
+  }, [activeTransactions]);
 
   const yearSeries = useMemo(() => MONTHS.map((label, i) => {
     const { income, expense } = monthTotals(i);
@@ -608,10 +726,10 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   }), [monthTotals]);
 
   const yearTotals = useMemo(() => {
-    const income = transactions.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0);
-    const expense = transactions.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
+    const income = activeTransactions.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount || 0), 0);
+    const expense = activeTransactions.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
     return { income, expense, balance: income - expense };
-  }, [transactions]);
+  }, [activeTransactions]);
 
   const runningBalanceThrough = (m) => {
     let bal = 0;
@@ -630,12 +748,12 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   }, [dashboardScope, selectedMonth, monthTotals, yearTotals]);
 
   const expenseByCategory = useMemo(() => {
-    const scopeTx = transactions.filter((t) => t.type === "expense" && (dashboardScope === "year" || t.month === selectedMonth));
+    const scopeTx = activeTransactions.filter((t) => t.type === "expense" && (dashboardScope === "year" || t.month === selectedMonth));
     const map = {};
     scopeTx.forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + Number(t.amount || 0); });
     return Object.entries(map).map(([id, value]) => ({ id, name: catById(id)?.name || id, value: Math.round(value), color: catById(id)?.color || SLATE }))
       .sort((a, b) => b.value - a.value);
-  }, [transactions, dashboardScope, selectedMonth, catById]);
+  }, [activeTransactions, dashboardScope, selectedMonth, catById]);
 
   // Calcula em qual mês/ano a fatura de um lançamento de cartão cai, considerando o dia de
   // fechamento do cartão (não apenas o mês do lançamento). Ex.: fechamento dia 15, compra dia 16
@@ -652,16 +770,16 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   const cardInvoice = (cardId, m, y) => {
     const card = cards.find((c) => c.id === cardId);
     const year = y ?? currentYear;
-    if (!card) return transactions.filter((t) => t.cardId === cardId && t.month === m).reduce((s, t) => s + Number(t.amount || 0), 0);
-    return transactions
+    if (!card) return activeTransactions.filter((t) => t.cardId === cardId && t.month === m).reduce((s, t) => s + Number(t.amount || 0), 0);
+    return activeTransactions
       .filter((t) => t.cardId === cardId)
       .filter((t) => { const p = invoicePeriodFor(card, t); return p.month === m && p.year === year; })
       .reduce((s, t) => s + Number(t.amount || 0), 0);
   };
 
   const pendingBadgeCount = useMemo(
-    () => transactions.filter((t) => !t.paid && (paymentStatus(t) === "overdue" || paymentStatus(t) === "soon")).length,
-    [transactions]
+    () => activeTransactions.filter((t) => !t.paid && (paymentStatus(t) === "overdue" || paymentStatus(t) === "soon")).length,
+    [activeTransactions]
   );
 
   const recurrenceBadgeCount = useMemo(() => {
@@ -693,7 +811,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
     Pago: t.paid ? "Sim" : "Não", Vencimento: t.dueDay || "",
     Notas: sanitizeForSheet(t.notes || ""), ParcelaNumero: t.installmentNumber || "", ParcelaTotal: t.installmentTotal || "",
     RecorrenciaGrupoId: t.recurringGroupId || "", RecorrenciaIndefinida: t.indefiniteRecurring ? "Sim" : "",
-    BankId: t.bankId || "",
+    BankId: t.bankId || "", Ignorado: t.ignored ? "Sim" : "",
   });
 
   const parseCsvIntoTransactions = (text) => {
@@ -736,6 +854,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       installmentTotal: r.ParcelaTotal ? Number(r.ParcelaTotal) : undefined,
       recurringGroupId: r.RecorrenciaGrupoId || undefined,
       indefiniteRecurring: String(r.RecorrenciaIndefinida || "").toLowerCase().startsWith("s"),
+      ignored: String(r.Ignorado || "").toLowerCase().startsWith("s"),
     }));
   };
 
@@ -809,6 +928,17 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       if (remoteCurrentYear && remoteCurrentYear > currentYear) setCurrentYear(remoteCurrentYear);
       const effectiveCurrentYear = remoteCurrentYear && remoteCurrentYear > currentYear ? remoteCurrentYear : currentYear;
 
+      // Credencial de acesso: adota a da planilha se ela for mais recente que a deste
+      // navegador; se a local for mais recente (ou a planilha ainda não tiver nenhuma), sobe a
+      // local. É o que faz a troca de senha valer em qualquer dispositivo.
+      const remoteAuth = authRecordFromConfigRows(remoteConfig);
+      const localAuthAt = authConfig.updatedAt || "";
+      if (remoteAuth && remoteAuth.updatedAt > localAuthAt) {
+        applyRemoteAuth(remoteAuth);
+      } else if (authConfig.updatedAt && (!remoteAuth || localAuthAt > (remoteAuth.updatedAt || ""))) {
+        pushToSheet({ Config: AUTH_CONFIG_ROWS.map(([id, chave, campo]) => ({ ID: id, Chave: chave, Valor: authConfig[campo] ?? "" })) });
+      }
+
       const monthIndex = (label) => {
         const i = MONTHS.findIndex((m) => m.toLowerCase() === String(label || "").trim().slice(0, 3).toLowerCase());
         return i >= 0 ? i : 0;
@@ -830,6 +960,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         recurringGroupId: r.RecorrenciaGrupoId || undefined,
         indefiniteRecurring: String(r.RecorrenciaIndefinida || "").toLowerCase().startsWith("s") || undefined,
         bankId: r.BankId || undefined,
+        ignored: String(r.Ignorado || "").toLowerCase().startsWith("s") || undefined,
       }));
       // Separa o que é do ano corrente (editável, vai para "transactions") do que é de anos já
       // arquivados (só leitura, vai para "archivedYears") — é isso que permite recuperar o
@@ -856,6 +987,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               installmentTotal: pick(rem.installmentTotal, loc.installmentTotal),
               recurringGroupId: pick(rem.recurringGroupId, loc.recurringGroupId),
               indefiniteRecurring: rem.indefiniteRecurring ?? loc.indefiniteRecurring,
+              ignored: rem.ignored ?? loc.ignored,
             });
           } else merged.push(loc || rem);
         });
@@ -1046,7 +1178,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 
         {credentialsModalOpen && (
           <ChangeCredentialsModal
-            authConfig={authConfig} verifyCredentials={verifyCredentials} updateCredentials={updateCredentials}
+            authConfig={authConfig} verifyCredentials={verifyCredentials} updateCredentials={pushCredentialsToSheet}
             persistWarning={persistWarning} onClose={() => setCredentialsModalOpen(false)}
           />
         )}
@@ -1067,14 +1199,14 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
               selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}
               scopeKpis={scopeKpis} expenseByCategory={expenseByCategory} yearSeries={yearSeries}
               cards={cards} vehicles={vehicles} cardInvoice={cardInvoice} currentYear={currentYear}
-              categories={categories} transactions={transactions} catById={catById}
+              categories={categories} transactions={activeTransactions} catById={catById}
               budgets={budgets} setBudget={setBudget} removeBudget={removeBudget}
             />
           )}
           {tab === "lancamentos" && (
             <LancamentosTab
               selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}
-              transactions={transactions} categories={categories} cards={cards} vehicles={vehicles}
+              transactions={transactions} categories={categories} cards={cards} vehicles={vehicles} toggleIgnored={toggleIgnored}
               catById={catById} subById={subById}
               addTransaction={addTransaction} updateTransaction={updateTransaction} deleteTransaction={deleteTransaction}
               addTransactionSeries={addTransactionSeries}
@@ -1104,7 +1236,7 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
             <ConexaoTab sheetConfig={sheetConfig} setSheetConfig={setSheetConfig} importFromSheet={importFromSheet} importFromPastedCsv={importFromPastedCsv} exportCsv={exportCsv} syncWithSheet={syncWithSheet} resetAllTransactions={resetAllTransactions} transactionCount={transactions.length} />
           )}
           {tab === "relatorio" && (
-            <RelatorioTab categories={categories} transactions={transactions} yearTotals={yearTotals} catById={catById}
+            <RelatorioTab categories={categories} transactions={activeTransactions} yearTotals={yearTotals} catById={catById}
               currentYear={currentYear} archivedYears={archivedYears} archiveCurrentYear={archiveCurrentYear} />
           )}
           {tab === "seguranca" && (
@@ -1177,8 +1309,7 @@ function LoginScreen({ onSuccess, authConfig, onAttempt }) {
     setChecking(true);
     setError("");
     try {
-      const hash = await sha256Hex(`${liveUsername}:${livePassword}`);
-      if (hash === authConfig.hash) {
+      if (await checkPassword(authConfig, liveUsername, livePassword)) {
         saveStoredLockout({ attempts: 0, lockedUntil: null });
         onAttempt?.(liveUsername, true);
         onSuccess();
@@ -1316,7 +1447,7 @@ function ChangeCredentialsModal({ authConfig, verifyCredentials, updateCredentia
         <div>
           <div className="flex items-start gap-3 mb-4 px-3.5 py-3 rounded-lg" style={{ background: SAGE_SOFT }}>
             <CheckCircle2 size={18} color={SAGE} className="flex-shrink-0 mt-0.5" />
-            <p className="text-[13px]" style={{ color: INK }}>Credenciais atualizadas com sucesso. Use o novo usuário e senha no próximo login.</p>
+            <p className="text-[13px]" style={{ color: INK }}>Credenciais atualizadas com sucesso. Use o novo usuário e senha no próximo login. Se a sincronização com o Google Sheets estiver configurada, elas passam a valer também nos seus outros dispositivos.</p>
           </div>
           {persistWarning && (
             <div className="flex items-start gap-2 mb-4 px-3.5 py-3 rounded-lg text-[12px]" style={{ background: GOLD_SOFT, color: "#8C6A1B" }}>
@@ -1382,9 +1513,7 @@ export default function App() {
     setLoginLog((prev) => [{ id: uid(), username, success, at: new Date().toISOString() }, ...prev].slice(0, 50));
   };
 
-  const updateCredentials = async (newUsername, newPassword) => {
-    const hash = await sha256Hex(`${newUsername.trim()}:${newPassword}`);
-    const next = { username: newUsername.trim(), hash };
+  const persistAuth = (next) => {
     setAuthConfig(next);
     try {
       window.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(next));
@@ -1395,12 +1524,50 @@ export default function App() {
     return next;
   };
 
-  const verifyCredentials = async (usernameInput, passwordInput) => {
-    const hash = await sha256Hex(`${usernameInput.trim()}:${passwordInput}`);
-    return hash === authConfig.hash;
+  const updateCredentials = async (newUsername, newPassword) => persistAuth(await buildAuthRecord(newUsername, newPassword));
+
+  const verifyCredentials = async (usernameInput, passwordInput) => checkPassword(authConfig, usernameInput, passwordInput);
+
+  // Chamado pela sincronização quando a planilha traz uma credencial mais recente que a deste
+  // navegador — é o que faz a troca de senha valer em qualquer dispositivo.
+  const applyRemoteAuth = (remote) => {
+    if (!remote || !remote.hash || !remote.username) return;
+    const localAt = authConfig.updatedAt || "";
+    if (remote.updatedAt && remote.updatedAt > localAt) persistAuth(remote);
   };
 
   const isDefaultCredentials = authConfig.hash === AUTH_CONFIG.hash;
+
+  // Busca a credencial na planilha ANTES do login, quando já existe uma conexão configurada
+  // neste navegador. Sem isso, a senha trocada em outro dispositivo só passaria a valer depois
+  // de o usuário entrar com a credencial antiga — o que anularia boa parte do ganho.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = window.localStorage?.getItem(SHEET_STORAGE_KEY);
+        const cfg = raw ? JSON.parse(raw) : null;
+        if (!cfg?.appsScriptUrl) return;
+        const url = cfg.secret
+          ? cfg.appsScriptUrl + (cfg.appsScriptUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(cfg.secret)
+          : cfg.appsScriptUrl;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = JSON.parse(await res.text());
+        const rows = Array.isArray(data) ? [] : (data.Config || []);
+        const byKey = {};
+        rows.forEach((r) => { if (r && r.Chave) byKey[String(r.Chave)] = r.Valor; });
+        if (!byKey.AuthHash || !byKey.AuthUsuario || cancelled) return;
+        applyRemoteAuth({
+          username: String(byKey.AuthUsuario), algo: byKey.AuthAlgoritmo || undefined,
+          salt: byKey.AuthSalt || undefined, iterations: Number(byKey.AuthIteracoes) || undefined,
+          hash: String(byKey.AuthHash), updatedAt: byKey.AuthAtualizadoEm ? String(byKey.AuthAtualizadoEm) : "",
+        });
+      } catch (_) { /* offline ou planilha indisponível: segue com a credencial local */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!authed) return <LoginScreen authConfig={authConfig} onSuccess={() => setAuthed(true)} onAttempt={logLoginAttempt} />;
   return (
@@ -1409,6 +1576,7 @@ export default function App() {
       authConfig={authConfig}
       updateCredentials={updateCredentials}
       verifyCredentials={verifyCredentials}
+      applyRemoteAuth={applyRemoteAuth}
       persistWarning={persistWarning}
       isDefaultCredentials={isDefaultCredentials}
       loginLog={loginLog}
@@ -1645,6 +1813,7 @@ const STATUS_META = {
   overdue: { label: "Vencido", color: RUST, bg: RUST_SOFT, icon: AlertTriangle },
   soon: { label: "Vence em breve", color: "#8C6A1B", bg: GOLD_SOFT, icon: Clock },
   pending: { label: "Pendente", color: SLATE, bg: "#EFEBE0", icon: Circle },
+  ignored: { label: "Não será pago", color: SLATE, bg: "#E6E2D6", icon: Ban },
 };
 const STATUS_META_INCOME = { ...STATUS_META, paid: { ...STATUS_META.paid, label: "Recebido" }, pending: { ...STATUS_META.pending, label: "A receber" } };
 
@@ -1656,18 +1825,21 @@ function StatusChip({ t, onClick }) {
   return (
     <button onClick={onClick} disabled={!interactive} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium whitespace-nowrap"
       style={{ background: meta.bg, color: meta.color, cursor: interactive ? "pointer" : "default" }}
-      title={interactive ? "Clique para alternar o status de pagamento" : undefined}>
+      title={!interactive ? undefined : status === "ignored" ? "Marcado como \"não será pago\" — clique para voltar a cobrar" : "Clique para alternar o status de pagamento"}>
       <Icon size={11.5} strokeWidth={2.4} />
       {meta.label}
     </button>
   );
 }
 
-function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, clearMonthTransactions, currentYear, archivedYears }) {
+function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categories, cards, vehicles, catById, subById, addTransaction, updateTransaction, deleteTransaction, addTransactionSeries, togglePaid, toggleIgnored, clearMonthTransactions, currentYear, archivedYears }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [duplicateSeed, setDuplicateSeed] = useState(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  // Edição do vencimento direto na lista: { id, value } enquanto o campo está aberto.
+  const [editingDueDay, setEditingDueDay] = useState(null);
+  const cancelDueDayRef = React.useRef(false);
   const [filterType, setFilterType] = useState("all");
   const [confirmClear, setConfirmClear] = useState(false);
   const [descQuery, setDescQuery] = useState("");
@@ -1722,21 +1894,38 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
     setModalOpen(true);
   };
 
+  // Confirma a edição do vencimento feita direto na lista. Escape cancela: o onKeyDown levanta
+  // a flag antes do blur, porque o estado do React ainda não teria sido atualizado a tempo.
+  const commitDueDay = (t) => {
+    if (cancelDueDayRef.current) { cancelDueDayRef.current = false; setEditingDueDay(null); return; }
+    if (!editingDueDay || editingDueDay.id !== t.id) return;
+    const parsed = Number(editingDueDay.value);
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      const day = Math.min(31, Math.round(parsed));
+      if (day !== (t.dueDay ?? 10)) updateTransaction(t.id, { dueDay: day });
+    }
+    setEditingDueDay(null);
+  };
+
+  // O que está marcado como "não será pago" continua listado, mas fora de resumo, subtotais e
+  // alertas — mesma regra usada nos cálculos do Dashboard.
+  const countedMonthTx = useMemo(() => allMonthTx.filter((t) => !t.ignored), [allMonthTx]);
+
   const subtotals = useMemo(() => {
     const map = {};
-    allMonthTx.forEach((t) => {
+    countedMonthTx.forEach((t) => {
       const key = t.categoryId;
       map[key] = map[key] || { income: 0, expense: 0 };
       map[key][t.type] += Number(t.amount || 0);
     });
     return map;
-  }, [allMonthTx]);
+  }, [countedMonthTx]);
 
-  const income = allMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-  const expense = allMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
+  const income = countedMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
+  const expense = countedMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
 
-  const overdueItems = isViewingCurrent ? allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "overdue").sort((a, b) => a.dueDay - b.dueDay) : [];
-  const soonItems = isViewingCurrent ? allMonthTx.filter((t) => !t.paid && paymentStatus(t) === "soon").sort((a, b) => a.dueDay - b.dueDay) : [];
+  const overdueItems = isViewingCurrent ? countedMonthTx.filter((t) => !t.paid && paymentStatus(t) === "overdue").sort((a, b) => a.dueDay - b.dueDay) : [];
+  const soonItems = isViewingCurrent ? countedMonthTx.filter((t) => !t.paid && paymentStatus(t) === "soon").sort((a, b) => a.dueDay - b.dueDay) : [];
   const hasAlerts = overdueItems.length > 0 || soonItems.length > 0;
 
   return (
@@ -1858,10 +2047,13 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                   </thead>
                   <tbody>
                     {monthTx.map((t) => (
-                      <tr key={t.id} style={{ borderBottom: `1px solid ${LINE}` }} className="hover:bg-black/[0.015]">
+                      <tr key={t.id} style={{ borderBottom: `1px solid ${LINE}`, opacity: t.ignored ? 0.55 : 1 }} className="hover:bg-black/[0.015]">
                         <td className="px-4 py-2.5 max-w-[240px]">
                           <div className="flex items-center gap-1.5">
-                            <div className="font-medium truncate" title={t.notes || undefined} style={t.notes ? { cursor: "help" } : undefined}>{t.description}</div>
+                            {/* A descrição é truncada na coluna; o tooltip mostra ela por
+                                inteiro, e junta as observações quando existem. */}
+                            <div className="font-medium truncate" title={t.notes ? `${t.description}\n\nObservações: ${t.notes}` : t.description}
+                              style={{ cursor: "help", textDecoration: t.ignored ? "line-through" : undefined }}>{t.description}</div>
                             {t.notes && <Info size={12.5} color={SLATE} className="flex-shrink-0" title={t.notes} style={{ cursor: "help" }} />}
                           </div>
                           {(t.cardId || t.vehicleId) && <div className="text-[11px] mt-0.5" style={{ color: SLATE }}>{t.cardId ? cards.find((c) => c.id === t.cardId)?.name : vehicles.find((v) => v.id === t.vehicleId)?.name}</div>}
@@ -1877,7 +2069,33 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                         </td>
                         {isGlobalSearch && <td className="px-3 py-2.5 whitespace-nowrap" style={{ color: SLATE }}>{MONTHS[t.month]}</td>}
                         <td className="px-3 py-2.5 whitespace-nowrap" style={{ color: SLATE }}>{catById(t.categoryId)?.name} <span className="opacity-60">› {subById(t.categoryId, t.subId)?.name}</span></td>
-                        <td className="px-3 py-2.5 text-center whitespace-nowrap" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>dia {t.dueDay}</td>
+                        <td className="px-3 py-2.5 text-center whitespace-nowrap" style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace" }}>
+                          {editingDueDay?.id === t.id ? (
+                            <input
+                              autoFocus type="number" min="1" max="31" value={editingDueDay.value}
+                              onChange={(e) => setEditingDueDay({ id: t.id, value: e.target.value })}
+                              onBlur={() => commitDueDay(t)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") e.currentTarget.blur();
+                                if (e.key === "Escape") { cancelDueDayRef.current = true; e.currentTarget.blur(); }
+                              }}
+                              className="w-16 px-1.5 py-1 text-[12.5px] text-center rounded-md outline-none"
+                              style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace" }}
+                            />
+                          ) : (
+                            <button
+                              disabled={!isViewingCurrent}
+                              onClick={() => setEditingDueDay({ id: t.id, value: String(t.dueDay ?? 10) })}
+                              className="px-1.5 py-1 rounded-md"
+                              style={{ color: SLATE, fontFamily: "'JetBrains Mono', monospace", cursor: isViewingCurrent ? "pointer" : "default", background: "transparent", borderBottom: isViewingCurrent ? `1px dashed ${LINE}` : "none" }}
+                              title={isViewingCurrent
+                                ? (isDueDateShifted(t) ? `Clique para alterar. Cai em fim de semana — só é cobrável na segunda, dia ${effectiveDueDate(t).getDate()}.` : "Clique para alterar o dia do vencimento")
+                                : undefined}
+                            >
+                              dia {t.dueDay}{isDueDateShifted(t) ? "*" : ""}
+                            </button>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-center"><StatusChip t={t} onClick={isViewingCurrent ? () => togglePaid(t.id) : undefined} /></td>
                         <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace", color: t.type === "income" ? SAGE : RUST }}>
                           {t.type === "income" ? "+" : "−"} {brl(t.amount)}
@@ -1886,6 +2104,10 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                           {isViewingCurrent && (
                             <div className="flex items-center gap-1 justify-end">
                               <button onClick={() => handleDuplicate(t)} className="p-1.5 rounded-md btn-ghost" title="Duplicar lançamento"><Copy size={13} color={SLATE} /></button>
+                              <button onClick={() => toggleIgnored(t.id)} className="p-1.5 rounded-md btn-ghost"
+                                title={t.ignored ? "Voltar a considerar este lançamento" : "Marcar como \"não será pago\" (fica no histórico, fora das somas)"}>
+                                <Ban size={13} color={t.ignored ? SAGE : SLATE} />
+                              </button>
                               <button onClick={() => { setEditing(t); setModalOpen(true); }} className="p-1.5 rounded-md btn-ghost"><Pencil size={13} color={SLATE} /></button>
                               <button onClick={() => deleteTransaction(t.id)} className="p-1.5 rounded-md btn-ghost"><Trash2 size={13} color={RUST} /></button>
                             </div>
@@ -2906,7 +3128,7 @@ function VehicleInstallmentsModal({ vehicle, transactions, categories, selectedM
 
   // Candidatos a vínculo: despesa do mesmo mês, sem cartão e ainda sem outro veículo.
   const candidatesFor = useCallback((month) => transactions.filter((t) =>
-    t.month === month && t.type === "expense" && !t.cardId && (!t.vehicleId || t.vehicleId === vehicle.id)
+    t.month === month && t.type === "expense" && !t.cardId && !t.ignored && (!t.vehicleId || t.vehicleId === vehicle.id)
   ), [transactions, vehicle.id]);
 
   // Sugestão automática: se existe um lançamento no mês com exatamente o valor da parcela,
@@ -3194,9 +3416,9 @@ function doPost(e) {
       <div className="ledger-card mb-4" style={{ background: PAPER }}>
         <h3 className="text-[13.5px] font-semibold mb-3">2. Como preparar sua planilha (3 minutos)</h3>
         <ol className="space-y-2 text-[12.5px]" style={{ color: SLATE }}>
-          <li><b style={{ color: INK }}>1.</b> Crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com as colunas: ID, Ano, Mes, Tipo, CategoriaId, Categoria, SubcategoriaId, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento, Notas, ParcelaNumero, ParcelaTotal, RecorrenciaGrupoId, RecorrenciaIndefinida, BankId. A coluna <b>Ano</b> é o que permite que anos arquivados fiquem salvos na planilha permanentemente (não só o ano corrente).</li>
+          <li><b style={{ color: INK }}>1.</b> Crie uma aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> com as colunas: ID, Ano, Mes, Tipo, CategoriaId, Categoria, SubcategoriaId, Subcategoria, Descricao, Valor, Cartao, Veiculo, Pago, Vencimento, Notas, ParcelaNumero, ParcelaTotal, RecorrenciaGrupoId, RecorrenciaIndefinida, BankId, Ignorado. A coluna <b>Ano</b> é o que permite que anos arquivados fiquem salvos na planilha permanentemente (não só o ano corrente); <b>Ignorado</b> guarda os lançamentos marcados como "não será pago".</li>
           <li><b style={{ color: INK }}>2.</b> Crie também uma segunda aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Categorias</code> com as colunas: ID, Tipo, CategoriaId, Categoria, Cor, SubcategoriaId, Subcategoria. É nela que suas categorias e subcategorias ficam salvas.</li>
-          <li><b style={{ color: INK }}>2b.</b> Crie uma terceira aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Config</code> com as colunas: ID, Chave, Valor. É nela que fica salvo qual é o "ano corrente" do sistema — sem isso, se você limpar os dados do navegador depois de arquivar um ano, o app pode ficar confuso sobre qual ano está ativo.</li>
+          <li><b style={{ color: INK }}>2b.</b> Crie uma terceira aba chamada <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Config</code> com as colunas: ID, Chave, Valor. É nela que fica salvo qual é o "ano corrente" do sistema — sem isso, se você limpar os dados do navegador depois de arquivar um ano, o app pode ficar confuso sobre qual ano está ativo. É nela também que fica o <b>hash da sua senha</b> (nunca a senha em si), para que a troca de usuário/senha valha em qualquer dispositivo. Por causa disso, <b>configure o token secreto do passo 4</b>: sem ele, quem descobrir a URL do Apps Script consegue ler esse hash.</li>
           <li><b style={{ color: INK }}>2c.</b> Crie mais três abas: <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Cartoes</code> (colunas: ID, Nome, Limite, DiaFechamento, DiaVencimento, Cor), <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Veiculos</code> (colunas: ID, Nome, ValorTotal, TotalParcelas, ValorParcela, ParcelasPagas, MesInicio) e <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Orcamentos</code> (colunas: ID, CategoriaId, Limite, Ativo, Periodo). Todas opcionais — se você não usa alguma dessas funcionalidades no app, pode deixar a aba correspondente vazia (só com o cabeçalho) ou nem criar.</li>
           <li><b style={{ color: INK }}>3.</b> Para a importação simples em CSV (passo 1 acima, opcional): vá em <b>Arquivo → Compartilhar → Publicar na Web</b> (não confunda com o botão "Compartilhar" comum), escolha a aba <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>Lancamentos</code> especificamente e o formato <b>CSV</b>. Essa publicação só cobre Lançamentos — Categorias sincroniza apenas pela via bidirecional (Apps Script, passo 4 abaixo).</li>
           <li><b style={{ color: INK }}>4.</b> Copie o link gerado e cole no campo do passo 1. Confira se o número depois de <code className="px-1 rounded" style={{ background: GOLD_SOFT }}>gid=</code> corresponde à aba certa.</li>
@@ -3403,7 +3625,7 @@ function checkLocalStorageAvailable() {
   } catch (_) { return false; }
 }
 
-function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig }) {
+function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig, authRecordAlgo }) {
   const secureContext = typeof window !== "undefined" && window.isSecureContext;
   const localStorageOk = checkLocalStorageAvailable();
   const sanitizeSelfTest = sanitizeForSheet("=CMD|'/C calc'!A1") === "'=CMD|'/C calc'!A1" && sanitizeForSheet("Mercado") === "Mercado";
@@ -3429,7 +3651,23 @@ function buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig
     {
       id: "auth-client-side", category: "Autenticação", label: "Modelo de autenticação client-side",
       status: "warn",
-      detail: "Login é validado inteiramente no navegador (hash SHA-256 comparado no código). Protege contra acesso casual, mas não contra alguém que leia o bundle ou manipule o estado via DevTools. Sem backend, não há como eliminar essa limitação por completo.",
+      detail: "Login é validado inteiramente no navegador. Protege contra acesso casual, mas não contra alguém que leia o bundle ou manipule o estado via DevTools. Sem backend, não há como eliminar essa limitação por completo.",
+    },
+    {
+      id: "cred-hash", category: "Autenticação", label: "Formato do hash da senha",
+      status: authRecordAlgo === AUTH_ALGO_PBKDF2 ? "ok" : "warn",
+      detail: authRecordAlgo === AUTH_ALGO_PBKDF2
+        ? `Senha guardada como PBKDF2-HMAC-SHA256 com salt aleatório e ${PBKDF2_ITERATIONS.toLocaleString("pt-BR")} iterações — caro de atacar offline mesmo por quem obtenha o hash.`
+        : "Senha ainda no formato antigo (SHA-256 sem salt), que cai rápido em ataque de dicionário offline. Troque a senha uma vez em \"Alterar usuário e senha\" para migrar ao formato com salt.",
+    },
+    {
+      id: "cred-sync", category: "Autenticação", label: "Credencial sincronizada com a planilha",
+      status: !sheetConfig?.appsScriptUrl ? "na" : (sheetConfig.secret ? "ok" : "warn"),
+      detail: !sheetConfig?.appsScriptUrl
+        ? "Sincronização não configurada — a credencial fica só neste navegador e volta ao padrão de fábrica se você limpar os dados."
+        : sheetConfig.secret
+        ? "O hash da senha (nunca a senha) é gravado na aba Config da planilha, para valer em qualquer dispositivo. O token secreto protege o acesso a essa planilha."
+        : "O hash da senha é gravado na planilha, mas NÃO há token secreto configurado — quem descobrir a URL do Apps Script consegue lê-lo. Configure um token em Conexão Google Sheets.",
     },
     {
       id: "brute-force", category: "Autenticação", label: `Bloqueio por tentativas (${AUTH_CONFIG.maxAttempts} tentativas / ${AUTH_CONFIG.lockoutSeconds}s)`,
@@ -3503,9 +3741,9 @@ const SEC_STATUS_META = {
 function SegurancaTab({ authConfig, isDefaultCredentials, persistWarning, loginLog, sheetConfig, setTab }) {
   const [lastRun, setLastRun] = useState(() => new Date());
   const { applicable, notApplicable } = useMemo(
-    () => buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig }),
+    () => buildSecurityChecks({ isDefaultCredentials, persistWarning, sheetConfig, authRecordAlgo: authConfig?.algo }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isDefaultCredentials, persistWarning, sheetConfig, lastRun]
+    [isDefaultCredentials, persistWarning, sheetConfig, authConfig, lastRun]
   );
   const [showNA, setShowNA] = useState(false);
 

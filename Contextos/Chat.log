@@ -201,3 +201,109 @@ o que virou lançamento, sem considerar as 45 anteriores ao sistema.
 Durante o trabalho, o build quebrou uma vez por um bug conhecido do npm com
 dependências opcionais (@rollup/rollup-win32-x64-msvc ausente); resolvido com um
 npm install novo, dentro da autorização já dada.
+
+================================================================================
+DATA: 2026-08-15 21:18:32
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Vamos para as etapas: T3, T6, T8, T9 e T10.
+
+Agente:
+Entregues T3, T6, T8 e T10, todas testadas na interface real. A T9 não foi
+implementada: ela depende de uma decisão de segurança do usuário, perguntada ao
+final (a pergunta já havia sido registrada quando a fila foi montada).
+
+T3 — tooltip do nome do lançamento: passou a mostrar a descrição inteira (que
+fica truncada na coluna) e, quando existem observações, soma as duas. Optado por
+somar em vez de trocar, para não perder a informação de observações que o
+tooltip já trazia.
+
+T6 — vencimento editável direto na lista: virou botão com sublinhado tracejado;
+clicar abre um campo já focado, Enter ou sair salva, Escape descarta. O Escape
+precisou de uma flag em ref, porque o estado do React não é atualizado a tempo
+de o onBlur enxergar o cancelamento. Continua desabilitado em ano arquivado.
+
+T8 — cálculo de "vencido": duas correções. A hora passou a ser zerada dos dois
+lados (a data de vencimento nasce à meia-noite e era comparada com um "agora"
+que carrega a hora, então tudo aparecia como vencido no próprio dia do
+vencimento), e vencimento em sábado/domingo é empurrado para a segunda-feira. O
+vencimento deslocado ganha um asterisco na lista e um tooltip dizendo em que dia
+passa a ser cobrável. FERIADOS NÃO SÃO CONSIDERADOS — decisão registrada com as
+alternativas descartadas e pergunta em aberto no TODO.
+
+T10 — "não será pago": novo estado ignored, alternado por um botão na linha. O
+lançamento fica riscado e esmaecido, continua no histórico e sai de todas as
+somas: KPIs, gráficos, resumo e subtotais do mês, orçamentos, faturas de cartão,
+relatório anual e contagem de pendências. Para isso foi criado um único ponto de
+filtro no Dashboard (activeTransactions) do qual todas as somas passam a partir;
+a lista continua usando transactions inteiro. Marcar como pago limpa o ignored e
+vice-versa. Persistido na coluna nova Ignorado, aditiva — planilha antiga sem ela
+continua funcionando. Template do Apps Script e README atualizados.
+
+Testes na interface real, com a data do dia (15/08/2026, um sábado), que serviu
+bem ao caso da T8: vencimento dia 15 (hoje) ficou "Vence em breve" e não
+"Vencido" — era exatamente o defeito; dia 14 (sexta, ontem) ficou "Vencido"; dia
+22 (sábado) ficou "Pendente" com tooltip apontando segunda, dia 24. T6: dia 14
+alterado para 27 pela lista, com o status recalculando sozinho, e Escape
+descartando a alteração seguinte. T10: resumo de Agosto caiu de R$ 600 para
+R$ 300 ao ignorar o lançamento de R$ 300, KPIs do Dashboard acompanharam, a linha
+seguiu visível e riscada, e reverter devolveu os R$ 600. T3: tooltip conferido
+com e sem observações. Console sem erros de aplicação e sem avisos do React.
+
+Registrado em Convencoes.md que toda soma financeira parte de activeTransactions
+e nunca de transactions, e que status de vencimento só se calcula por
+paymentStatus() — as duas são as formas de errar em silêncio nesse código.
+
+O bug conhecido do npm com dependências opcionais (@rollup/rollup-win32-x64-msvc)
+voltou a quebrar o build uma vez e foi resolvido com npm install, como da vez
+anterior. Vale considerar regenerar o package-lock.json no Windows, já que o
+lockfile atual nasceu no Linux.
+
+================================================================================
+DATA: 2026-08-15 23:19:04
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+(resposta à pergunta sobre a T9) Escolheu "Planilha + hash reforçado
+(recomendado)": gravar na planilha um hash com salt aleatório e PBKDF2, em vez
+do SHA-256 simples.
+
+Agente:
+T9 implementada na opção escolhida. A senha passou a ser guardada como
+PBKDF2-HMAC-SHA256 com salt aleatório de 16 bytes e 210.000 iterações
+(recomendação OWASP), no localStorage e também na aba Config da planilha —
+usuário, algoritmo, salt, iterações, hash e data de atualização. Escolhida a aba
+Config, que já existe e que o Apps Script já lê e grava, para o usuário não
+precisar criar aba nova nem republicar o script.
+
+Durante a implementação apareceu um furo no desenho, que foi fechado: a
+credencial da planilha só chegava DEPOIS do login, então a senha trocada em
+outro dispositivo só passaria a valer depois de o usuário entrar com a senha
+antiga — o que anularia boa parte do ganho. A tela de login passou a buscar a
+credencial na planilha antes de autenticar, quando já existe conexão configurada
+no navegador (a configuração fica em localStorage, acessível antes do login).
+
+Compatibilidade preservada: o formato antigo (SHA-256 de "usuario:senha", sem
+salt) continua sendo aceito na verificação e é substituído na primeira troca de
+senha. Onde a Web Crypto não estiver disponível, o app cai para o formato antigo
+em vez de travar, e a tela de Diagnóstico avisa. Duas verificações novas nessa
+tela: formato do hash e credencial sincronizada — a segunda alerta quando a
+sincronização está ativa sem token secreto.
+
+Testado ponta a ponta com uma planilha falsa: a credencial padrão antiga continua
+entrando; ao trocar a senha, sobem para a planilha usuário/algoritmo/salt/
+iterações/hash/data e nenhuma senha em texto puro; simulando um segundo
+dispositivo (sem credencial local, com a mesma conexão configurada), a credencial
+foi puxada no login, a senha antiga passou a ser rejeitada e a nova funcionou.
+O arquivo temporário usado para servir a planilha falsa foi removido.
+
+Duas limitações informadas ao usuário e registradas no TODO: um navegador NOVO,
+sem conexão configurada, ainda entra com a credencial de fábrica (não há como
+consultar a planilha antes de o usuário configurá-la — só proteção na hospedagem
+ou backend resolvem); e o token secreto do Apps Script deixou de ser opcional na
+prática, já que agora o hash da senha fica na planilha.

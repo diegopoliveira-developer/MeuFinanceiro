@@ -16,15 +16,16 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
 
 | Ordem | Tarefa | Por que nesta posição |
 | --- | --- | --- |
-| 1º | **T8** — status "vencido" | Correção de bug real, já visível hoje. Pequeno. |
-| 2º | **T1** — modal não fechar ao clicar fora | Perda de dados digitados. Trivial. ✅ feito e testado |
-| 3º | **T3** — tooltip com a descrição | Trivial. |
-| 4º | **T6 + T7** — edição inline de vencimento e valor | Mesma natureza, fazer juntas. |
-| 5º | **T10** — marcar lançamento como "não será pago" | Muda o cálculo de pendências/KPIs — melhor antes das telas novas. |
-| 6º | **T2** — vincular parcelas em aberto do veículo | ✅ feito e testado (antecipado a pedido do usuário). |
-| 7º | **T5** — conciliação na importação de extrato | Depende de T10 e do vínculo de parcelas para não brigar com eles. |
-| 8º | **T4** — dashboard de cartões | Maior de todos, e o único que é tela nova inteira. |
-| 9º | **T9** — onde a senha fica salva | ⚠️ decisão de segurança pendente (abaixo). |
+| 1º | **T8** — status "vencido" | Correção de bug real. ✅ feito e testado |
+| 2º | **T1** — modal não fechar ao clicar fora | Perda de dados digitados. ✅ feito e testado |
+| 3º | **T3** — tooltip com a descrição | ✅ feito e testado |
+| 4º | **T6** — edição inline do vencimento | ✅ feito e testado |
+| 5º | **T10** — marcar lançamento como "não será pago" | ✅ feito e testado |
+| 6º | **T2** — vincular parcelas em aberto do veículo | ✅ feito e testado |
+| — | **T7** — edição inline do valor | ⏳ pendente. Mesma mecânica da T6, agora que ela existe. |
+| 7º | **T5** — conciliação na importação de extrato | ⏳ pendente. Agora pode se apoiar na T10. |
+| 8º | **T4** — dashboard de cartões | ⏳ pendente. Maior de todos, tela nova inteira. |
+| 9º | **T9** — senha sincronizada pela planilha | ✅ feito e testado (opção C, escolhida pelo usuário) |
 
 ### Tarefas
 
@@ -57,9 +58,11 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       lançamento, mas compara com o total do financiamento. Diferente do card de Categorias,
       que já usa `vehiclePaidInstallments()`. Decidir: usar o mesmo helper quando a série tem
       `vehicleId`, ou deixar claro no texto que o agregado é só das parcelas lançadas.
-- [ ] **T3 · Tooltip da descrição do lançamento.** Passar o mouse sobre o nome na lista deve
-      mostrar a descrição. Hoje o `title` da linha mostra as **observações** (`notes`), não a
-      descrição — confirmar se o pedido é trocar ou somar as duas informações.
+- [x] **T3 · Tooltip da descrição do lançamento.** ✅ **2026-08-15.** O tooltip mostra a
+      descrição por inteiro (ela é truncada na coluna) e, quando o lançamento tem observações,
+      soma as duas — em vez de trocar uma pela outra, que perderia a informação que já existia.
+      **Testado**: tooltip com observações traz descrição + "Observações: …"; sem observações,
+      traz só a descrição.
 - [ ] **T4 · Dashboard de cartões (tela nova).** Uma tela por cartão, com recorte mensal:
       total de compras do mês, lista das compras, gráficos e comparativo entre meses. Usar o
       ciclo real de fatura (`invoicePeriodFor`), não o mês bruto do lançamento — senão a tela
@@ -70,50 +73,58 @@ primeiro. O usuário pediu para começar por T1 e T2, fora dessa ordem — feito
       vínculo. Confirmado o vínculo, o lançamento é marcado como pago em vez de nascer um
       lançamento novo duplicado. Casar por valor é ambíguo por natureza (dois lançamentos de
       R$ 150 no mesmo mês) — a confirmação do usuário é obrigatória, nunca automática.
-- [ ] **T6 · Editar o dia de vencimento direto na lista.** Clicar no vencimento abre a edição
-      ali mesmo, sem abrir o modal.
+- [x] **T6 · Editar o dia de vencimento direto na lista.** ✅ **2026-08-15.** O vencimento
+      virou botão com sublinhado tracejado; clicar abre um campo ali mesmo, já focado. Enter ou
+      sair do campo salva, Escape descarta. Desabilitado em ano arquivado, como o resto.
+      **Testado**: dia 14 → 27 salvou e o status recalculou sozinho de "Vencido" para
+      "Pendente"; Escape depois de digitar outro valor manteve o 27.
 - [ ] **T7 · Editar o valor direto na lista.** Clicar no valor habilita a edição inline.
       Manter a validação de valor `> 0` (ver `Contextos/Conhecimento.md`).
-- [ ] **T8 · Corrigir o cálculo de "vencido".**
-      - **Bug confirmado no código**: `paymentStatus()` compara `dueDate` (meia-noite) com
-        `TODAY` (que carrega a hora atual), então **no próprio dia do vencimento** a diferença
-        já é negativa e o lançamento aparece como *vencido*. Corrigir zerando a hora dos dois
-        lados: vencido só quando hoje for **depois** do vencimento.
-      - **Dia útil**: vencimento que cai em sábado ou domingo passa a valer na segunda-feira
-        seguinte, e o status deve respeitar isso.
-      - ❓ **Feriado não está resolvido**: não existe calendário de feriados no sistema e não
-        há como saber os municipais. Decidir com o usuário: considerar só fim de semana, ou
-        acrescentar uma lista de feriados nacionais fixa/editável.
-- [ ] **T9 · Onde a senha de acesso fica salva — e se vai para a planilha.**
-      **Resposta ao que foi perguntado**: hoje a senha **é salva**, mas nunca em texto puro e
-      nunca na planilha. Ao trocar usuário/senha, o app guarda o **hash SHA-256** de
-      `usuario:senha` em `localStorage`, na chave `meufinanceiro_auth_v1`, só no navegador em
-      uso. Enquanto o usuário não troca, vale o hash padrão que está no código (`AUTH_CONFIG`).
-      Consequência real: **a troca de senha não acompanha o usuário entre dispositivos**, e
-      limpar os dados do navegador devolve a credencial ao padrão de fábrica.
-      **⚠️ Levar a senha para a planilha tem custo de segurança** — analisado abaixo, em
-      "Decisão pendente T9". Não implementar sem decisão explícita.
+- [x] **T8 · Corrigir o cálculo de "vencido".** ✅ **2026-08-15.** Hora zerada dos dois lados
+      (só é vencido a partir do dia seguinte) e vencimento de fim de semana empurrado para a
+      segunda (`nextBusinessDay`). O vencimento deslocado ganha um `*` na lista e um tooltip
+      dizendo em que dia passa a ser cobrável.
+      **Testado em 15/08/2026, um sábado**: vencimento dia 15 (hoje) → "Vence em breve", não
+      "Vencido" — era exatamente o caso errado; dia 14 (sexta, ontem) → "Vencido"; dia 22
+      (sábado) → "Pendente", com o tooltip apontando segunda, dia 24.
+- [ ] **T8b · Feriados não são considerados no vencimento.** Só fim de semana. Não existe
+      calendário de feriados no sistema, e os municipais dependem da cidade. **Decisão
+      pendente**: manter só fim de semana, ou acrescentar uma lista de feriados editável pelo
+      usuário. Ver `Contextos/Decisoes.md` para as alternativas já descartadas.
+- [x] **T9 · Senha sincronizada pela planilha, com hash reforçado.** ✅ **2026-08-15**, na
+      opção C (recomendada), escolhida pelo usuário.
+      **Antes**: hash SHA-256 de `usuario:senha` só em `localStorage` — trocar de dispositivo
+      ou limpar os dados devolvia a credencial ao padrão de fábrica.
+      **Agora**: PBKDF2-HMAC-SHA256 com salt aleatório e 210.000 iterações, gravado no
+      `localStorage` **e** na aba `Config` da planilha (que já existia — não é preciso criar
+      aba nem republicar o Apps Script). A tela de login busca a credencial na planilha antes
+      de autenticar, quando já há conexão configurada. O formato antigo continua aceito e é
+      substituído na primeira troca de senha. Duas verificações novas na tela de Diagnóstico:
+      formato do hash e credencial sincronizada (esta alerta se não houver token secreto).
+      **Testado**: credencial padrão antiga continua entrando (compatibilidade); ao trocar a
+      senha, sobem para a planilha usuário/algoritmo/salt/iterações/hash/data e **nenhuma
+      senha em texto puro**; simulando um segundo dispositivo (sem credencial local, com a
+      mesma conexão), a credencial foi puxada no login, a senha antiga passou a ser rejeitada
+      e a nova funcionou.
+- [ ] **T9b · Navegador novo ainda entra com a credencial de fábrica.** Limite conhecido do
+      desenho: sem conexão configurada, o app não tem como consultar a planilha antes do login,
+      então cai no `AUTH_CONFIG` do código. Só se resolve de verdade com proteção na
+      hospedagem (opção D: Vercel Password Protection, plano pago + migrar do Firebase) ou com
+      backend. **Decisão pendente do usuário.**
+- [ ] **T9c · Token secreto do Apps Script deixou de ser opcional na prática.** Agora que o
+      hash da senha fica na planilha, quem tiver só a URL consegue lê-lo. Confirmar que o token
+      está configurado nos dois lados (app e script).
 
-### Decisão pendente T9 — sincronizar a credencial pela planilha
-
-O problema que o usuário quer resolver é real: a senha trocada não sobrevive à troca de
-navegador nem à limpeza dos dados. As opções, com o custo de cada uma:
-
-| Opção | O que resolve | O que custa |
-| --- | --- | --- |
-| **A. Não fazer nada** | — | O problema continua: senha volta ao padrão ao limpar o navegador. |
-| **B. Gravar o hash numa aba `Auth` da planilha** | Credencial passa a valer em qualquer dispositivo que sincronize. | O hash fica exposto a **quem tiver a URL do Apps Script**, e quem tem a URL já tem acesso a tudo — a proteção vira circular. Hash de senha curta cai em ataque de dicionário offline em segundos. |
-| **C. Gravar na planilha + endurecer o hash** (salt aleatório + muitas iterações, via PBKDF2 da Web Crypto) | Mesma sincronização, com o hash bem mais caro de atacar offline. | Mais código, e **não elimina** o problema de origem: continua sendo trava client-side (`Contextos/Decisoes.md`). |
-| **D. Proteção real na hospedagem** (ex.: Vercel Password Protection) | Barreira de verdade, antes do app carregar. | Plano pago e migração do deploy do Firebase para a Vercel. |
-
-Recomendação: **C** se a sincronização for mesmo necessária — nunca **B** puro. E, em
-qualquer caso, manter na tela o aviso de que isso não é autenticação de servidor.
-
-- [ ] **T10 · Marcar lançamento como "não será pago" / ignorado.** Um estado além de
-      pago/pendente, para o lançamento parar de contar como pendência sem precisar excluí-lo.
-      Ao implementar, revisar em conjunto: badge de pendências na barra lateral, banner de
-      alerta do mês, KPIs, orçamentos, relatório anual e a coluna correspondente na planilha
-      (coluna nova, nunca renomear as existentes).
+- [x] **T10 · Marcar lançamento como "não será pago" / ignorado.** ✅ **2026-08-15.** Botão de
+      proibido (⊘) na linha alterna o estado; o lançamento fica riscado e esmaecido, com o
+      status "Não será pago", e sai de **todas** as somas — KPIs, gráficos, resumo e subtotais
+      do mês, orçamentos, faturas de cartão, relatório anual e contagem de pendências —, via um
+      único ponto de filtro (`activeTransactions`). Marcar como pago limpa o estado e
+      vice-versa. Persistido na planilha na coluna nova `Ignorado` (aditiva: planilha antiga
+      sem ela continua funcionando); template do Apps Script e `README.md` atualizados.
+      **Testado**: resumo de Agosto caiu de R$ 600 para R$ 300 ao ignorar o lançamento de
+      R$ 300, KPIs do Dashboard idem, a linha continuou visível e riscada, e reverter devolveu
+      os R$ 600.
 
 ---
 

@@ -168,6 +168,10 @@ Versões exatas e comandos de execução em [`Ambientes.md`](Ambientes.md) — n
   localmente, e nenhuma é dado financeiro: credenciais alteradas
   (`meufinanceiro_auth_v1`), bloqueio de login (`meufinanceiro_lockout_v1`), configuração da
   planilha (`meufinanceiro_sheet_v1`) e o ano corrente (`meufinanceiro_current_year_v1`).
+- **A senha nunca é guardada em texto puro, em lugar nenhum.** O que se guarda — no navegador
+  e na aba `Config` da planilha — é um hash PBKDF2-HMAC-SHA256 com salt aleatório e 210.000
+  iterações. Como esse hash sai do navegador, o token secreto do Apps Script é o que impede
+  que quem descubra a URL o leia. Ver [`Decisoes.md`](Decisoes.md).
 - **Todo acesso a `localStorage` é envolvido em `try/catch` com fallback silencioso** para
   "só nesta sessão" — o app precisa continuar funcionando onde o armazenamento é bloqueado.
 - **Fonte de verdade da persistência é a planilha do Google**, quando configurada. Sem ela,
