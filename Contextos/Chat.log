@@ -862,3 +862,72 @@ postcss.config.js) ainda não têm cabeçalho; index.html e os .json seguem de f
 por decisão já registrada na tabela de Convencoes.md.
 
 Versão 1.9.2 nos três arquivos.
+
+================================================================================
+DATA: 2026-08-16 09:26:04
+USUÁRIO: Diego Oliveira
+AGENTE: Claude Code (Opus 5)
+================================================================================
+
+Usuário:
+Quatro tarefas novas: (1) cores dos itens vencidos ou a vencer em Lançamentos
+ruins de ler no modo noturno; (2) o seletor de modo noturno está quebrado; (3) as
+categorias voltam — apagou a categoria Spurs Car e ao relogar ela reapareceu;
+(4) ao carregar, o sistema leva alguns segundos até atualizar pela planilha, e
+deveria mostrar um loader em vez do conteúdo vazio.
+
+Agente:
+As quatro entregues. Duas exigiram diagnóstico e o resultado foi diferente do que
+o relato sugeria.
+
+(1) Não eram os chips de status — medi e eles estavam bem (5,5 a 8,6:1). O
+problema eram as pílulas do banner de alerta, que usavam bg-white/60, branco
+literal que ignora o tema: no escuro davam texto claro sobre fundo claro, 1,17:1.
+Trocadas por classe temática. Aproveitei para corrigir outros dois literais da
+mesma natureza (hover da linha da tabela e do botão de fechar do modal). Pior
+contraste da tela foi de 1,17:1 para 6,17:1.
+
+(2) Eram dois problemas somados. O primeiro, visual: os três rótulos escritos
+precisavam de 228px num espaço de 204px e o terceiro botão vazava para fora da
+pílula; agora são ícones com legenda e title/aria-label. O segundo é a causa real
+do "quebrado", e vale registro porque é sistêmico: o Chromium NÃO reanima uma
+propriedade em transição quando o que muda é a variável CSS por trás dela. Como
+todas as cores agora vêm de var(--…), qualquer elemento com transition ficava
+presos na cor do tema anterior — a troca aplicava pela metade. Confirmei o
+diagnóstico observando getComputedStyle mostrar a variável já com o valor novo e
+a propriedade com o valor antigo, e o valor saltar para o correto ao desligar a
+transição. Resolvido desligando todas as transições durante a troca de tema, por
+dois quadros.
+
+(2b) A mesma causa derrubava a barra lateral: ao redimensionar a janela para além
+de 1024px com a página aberta, ela ficava presa fora da tela, levando junto o
+seletor de tema. Resolvido com lg:transition-none. Não aparece em carregamento
+normal, só ao cruzar o breakpoint — provavelmente foi assim que o usuário topou
+com o seletor "quebrado".
+
+(3) Causa: seedCategories() roda a cada sessão e a sincronização fazia união de
+local com remoto, subindo para a planilha tudo que só existia local. A categoria
+apagada renascia do seed na sessão seguinte e era REGRAVADA na planilha. Com o
+seed rodando sempre, união e exclusão são incompatíveis. Agora, havendo
+categorias na planilha, ela decide o que existe; sobe só o que é local e não
+pertence ao seed, o que preserva categoria criada pelo usuário cuja gravação
+falhou. Decisão registrada como substituição da anterior. Trocados também os
+textos de exemplo que citavam "Spurs Car" — era o que ainda aparecia na tela
+depois da correção e continuaria confundindo.
+
+(4) Loader na primeira sincronização, com logotipo e indicador, em vez do
+conteúdo vazio. Vale só para a primeira; as demais seguem em segundo plano. O
+finally garante que falha de rede também libera a tela. A tela é autossuficiente
+em estilo, pela armadilha já registrada de que as classes injetadas pelo Dashboard
+não existem antes dele.
+
+Testado na interface: contraste medido antes e depois; cinco trocas de tema
+seguidas todas corretas; barra lateral e seletor reaparecendo ao redimensionar;
+categoria apagada não voltando e nenhum POST sendo enviado; loader aparecendo com
+a planilha simulada em 2,5s e liberando ao terminar. Console sem erros.
+
+O bug do npm com dependências opcionais quebrou o dev server outra vez, disparado
+pelo meu próprio npm install --package-lock-only da tarefa anterior. Desta vez
+subi a versão editando o package-lock.json direto, sem npm, para não repetir.
+
+Versão 1.9.3.

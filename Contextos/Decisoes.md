@@ -520,6 +520,31 @@ descobrir a senha — a decisão de 2026-08-15 sobre o login ser trava client-si
 
 ---
 
+## 2026-08-16 · Na sincronização de categorias, a planilha decide o que existe
+
+**Decisão**: quando a planilha já tem categorias, ela passa a ser a fonte da verdade sobre
+**quais existem**. Da taxonomia local, só sobe o que não está na planilha **e** não pertence ao
+seed de fábrica; com a planilha vazia (primeira sincronização), a taxonomia local sobe inteira.
+
+**Substitui**: a união simples decidida em 2026-08-15 para categorias, que subia toda linha
+local ausente do lado remoto.
+
+**Motivo**: bug relatado pelo usuário — apagou uma subcategoria, relogou e ela voltou.
+`seedCategories()` roda a cada carga, então a categoria apagada renascia no estado local, a
+união a tratava como "existe aqui e não lá" e a **regravava** na planilha. Com o seed rodando
+sempre, união e exclusão são incompatíveis: uma desfaz a outra.
+
+**Alternativas rejeitadas**: marcar exclusões com tombstones na planilha (resolve o caso geral,
+mas acrescenta um conceito e uma coluna para um app de uso familiar); deixar de semear a
+taxonomia (quem começa sem planilha ficaria sem categoria nenhuma); a planilha sobrescrever
+tudo, sem exceção (perderia categoria criada offline cuja gravação falhou).
+
+**Consequência**: o que é de fábrica e foi apagado não volta. Categoria **criada pelo usuário**
+que só exista localmente continua sendo enviada — é o caso do push que falhou. Vale só para
+categorias: os demais seeds retornam vazio e não têm esse problema.
+
+---
+
 ## 2026-08-15 · Adoção do padrão de contexto do `Basic AI Project Rules.md`
 
 **Decisão**: o antigo `Contextos/CONTEXT.md` — arquivo único que acumulava escopo, arquitetura,

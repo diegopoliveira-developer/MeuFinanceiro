@@ -418,6 +418,12 @@ function flattenCategories(categories) {
   return rows;
 }
 
+/* IDs da taxonomia de fábrica. `seedCategories()` roda a cada sessão, então uma categoria de
+   fábrica que o usuário apagou reaparece no estado local ao recarregar. Sem distinguir o que é
+   fábrica do que é criado pelo usuário, a sincronização tratava essa reaparição como "existe
+   aqui e não lá" e a devolvia para a planilha — a categoria apagada ressuscitava. */
+const SEED_CATEGORY_ROW_IDS = new Set(flattenCategories(seedCategories()).map((r) => r.ID));
+
 function unflattenCategoryRows(rows) {
   const order = { income: [], expense: [] };
   const catMap = { income: new Map(), expense: new Map() };
@@ -539,7 +545,7 @@ function Modal({ title, onClose, children, wide, closeOnBackdrop = true }) {
       <div onClick={(e) => e.stopPropagation()} className="w-full rounded-xl overflow-hidden flex flex-col" style={{ maxWidth: wide ? 640 : 440, maxHeight: "90vh", background: PARCHMENT, border: `1px solid ${LINE}`, boxShadow: "0 24px 60px rgba(16,27,45,0.35)" }}>
         <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ borderBottom: `1px solid ${LINE}` }}>
           <h3 className="text-[15px] font-semibold" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-black/5"><X size={17} color={SLATE} /></button>
+          <button onClick={onClose} className="p-1 rounded-md btn-ghost"><X size={17} color={SLATE} /></button>
         </div>
         <div className="p-5 overflow-y-auto">{children}</div>
       </div>
@@ -553,6 +559,27 @@ function EmptyState({ icon: Icon, title, desc }) {
       <div style={{ background: GOLD_SOFT, borderRadius: 999, padding: 14, marginBottom: 14 }}><Icon size={22} color={GOLD_INK} /></div>
       <div className="text-[14px] font-semibold mb-1" style={{ color: INK, fontFamily: "Inter, sans-serif" }}>{title}</div>
       <div className="text-[13px] max-w-xs" style={{ color: SLATE, fontFamily: "Inter, sans-serif" }}>{desc}</div>
+    </div>
+  );
+}
+
+/* Tela de carregamento da primeira sincronização.
+   Estilos inline e <style> próprio de propósito: ela renderiza ANTES do corpo do Dashboard,
+   e as classes que o Dashboard injeta (.btn-primary, fontes) ainda não existem nesse momento —
+   a mesma armadilha que já derrubou o botão da tela de login (ver Conhecimento.md). */
+function BootLoader() {
+  return (
+    <div style={{ fontFamily: "Inter, sans-serif", background: SHELL, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 22, padding: 20 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+        @keyframes mfSpin { to { transform: rotate(360deg); } }
+      `}</style>
+      <Logo height={40} onDark />
+      <div style={{ width: 26, height: 26, borderRadius: "50%", border: "2.5px solid rgba(255,255,255,0.18)", borderTopColor: "#fff", animation: "mfSpin .8s linear infinite" }} role="status" aria-label="Carregando" />
+      <div style={{ color: SHELL_MUTED, fontSize: 13, textAlign: "center" }}>
+        Buscando seus dados na planilha…
+        <div style={{ fontSize: 11.5, marginTop: 5, opacity: 0.75 }}>Isso leva alguns segundos na primeira abertura.</div>
+      </div>
     </div>
   );
 }
@@ -598,11 +625,24 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   React.useEffect(() => {
     try { window.localStorage?.setItem(SHEET_STORAGE_KEY, JSON.stringify({ url: sheetConfig.url, appsScriptUrl: sheetConfig.appsScriptUrl, secret: sheetConfig.secret })); } catch (_) { /* segue só em memória */ }
   }, [sheetConfig.url, sheetConfig.appsScriptUrl, sheetConfig.secret]);
+  /* Carga inicial: enquanto a primeira sincronização não termina, o app mostraria a tela
+     montada e vazia, e os dados apareceriam de repente alguns segundos depois. `bootLoading`
+     segura uma tela de carregamento até a planilha responder. Só vale para a PRIMEIRA
+     sincronização — as seguintes (botão "Sincronizar agora", auto-sync de CRUD) continuam em
+     segundo plano, sem cobrir a tela. */
+  const [bootLoading, setBootLoading] = useState(() => {
+    try {
+      const raw = window.localStorage?.getItem(SHEET_STORAGE_KEY);
+      return !!(raw && JSON.parse(raw)?.appsScriptUrl);
+    } catch (_) { return false; }
+  });
   const didAutoSync = React.useRef(false);
   React.useEffect(() => {
     if (didAutoSync.current) return;
     didAutoSync.current = true;
-    if (sheetConfig.appsScriptUrl) syncWithSheet();
+    if (!sheetConfig.appsScriptUrl) { setBootLoading(false); return; }
+    // `finally`: falha de rede também precisa liberar a tela, senão o loader ficaria preso.
+    syncWithSheet().finally(() => setBootLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Metas e orçamentos por categoria: { [categoryId]: { limit, active, period } }
@@ -1179,21 +1219,25 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
       setCategories((prevCats) => {
         const localRows = flattenCategories(prevCats);
         const remoteRows = remoteCategorias.filter((r) => r.ID);
-        const localById = new Map(localRows.map((r) => [r.ID, r]));
-        const remoteById = new Map(remoteRows.map((r) => [r.ID, r]));
-        const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
-        const mergedRows = [];
-        allIds.forEach((id) => {
-          const loc = localById.get(id);
-          const rem = remoteById.get(id);
-          mergedRows.push(rem || loc);
-        });
-        categoriesTouched = mergedRows.length;
 
-        const toPush = localRows.filter((r) => !remoteById.has(r.ID));
+        // Planilha ainda sem categorias (primeira sincronização): a taxonomia local sobe inteira.
+        if (!remoteRows.length) {
+          if (localRows.length) pushToSheet({ Categorias: localRows });
+          categoriesTouched = localRows.length;
+          return prevCats;
+        }
+
+        // Planilha com categorias: ela é a fonte da verdade sobre o que EXISTE.
+        // Sobe só o que é local e NÃO é de fábrica — categoria criada pelo usuário cuja
+        // gravação falhou (ex.: offline) continua sendo recuperada. O que é de fábrica e não
+        // está na planilha foi apagado de propósito e não volta.
+        const remoteById = new Map(remoteRows.map((r) => [r.ID, r]));
+        const toPush = localRows.filter((r) => !remoteById.has(r.ID) && !SEED_CATEGORY_ROW_IDS.has(r.ID));
         if (toPush.length) pushToSheet({ Categorias: toPush });
 
-        return mergedRows.length ? unflattenCategoryRows(mergedRows) : prevCats;
+        const mergedRows = [...remoteRows, ...toPush];
+        categoriesTouched = mergedRows.length;
+        return unflattenCategoryRows(mergedRows);
       });
 
       // 4) Mescla cartões de crédito
@@ -1261,6 +1305,9 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
   };
 
   /* ---------- Render ---------- */
+  // Segura a tela até a primeira sincronização terminar, para o usuário não ver o app vazio.
+  if (bootLoading) return <BootLoader />;
+
   return (
     <div style={{ fontFamily: "Inter, sans-serif", background: PARCHMENT, minHeight: "100vh", color: INK }}>
       <style>{`
@@ -1282,6 +1329,11 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
         /* currentColor em vez de um cinza fixo: no tema escuro um véu preto não apareceria. */
         .btn-ghost:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
         .chip { transition: all .15s ease; }
+        /* Pílulas dentro do banner de alerta. Usavam bg-white literal, que no tema escuro
+           ficava clara sob texto claro (1,17:1 de contraste). */
+        .alert-chip { background: var(--paper); border: 1px solid var(--line); }
+        .alert-chip:hover { background: var(--surface-alt); }
+        .table-row-hover:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(6px);} to { opacity: 1; transform: translateY(0);} }
         .fade-up { animation: fadeUp .35s ease both; }
       `}</style>
@@ -1294,7 +1346,12 @@ function Dashboard({ onLogout, authConfig, updateCredentials, verifyCredentials,
 
         {/* ============ SIDEBAR — ledger index tabs ============ */}
         <aside
-          className={`fixed lg:sticky top-0 left-0 z-50 h-screen transition-transform duration-200 ease-out ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
+          /* lg:transition-none é necessário, não cosmético: a partir de lg a barra é fixa e não
+             anima. Com a transição ligada, o transform do Tailwind depende da variável
+             --tw-translate-x, e o Chromium não reanima a propriedade quando é a media query que
+             muda a variável — a barra ficava presa em -100% (fora da tela) ao redimensionar a
+             janela para além de 1024px com a página aberta. */
+          className={`fixed lg:sticky top-0 left-0 z-50 h-screen transition-transform duration-200 ease-out lg:transition-none ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
           style={{ width: 236, background: SHELL, alignSelf: "flex-start", paddingTop: 18, display: "flex", flexDirection: "column" }}
         >
           <div className="px-5 pb-6 flex items-start gap-2.5">
@@ -1673,35 +1730,50 @@ const loadStoredTheme = () => {
   } catch (_) { /* localStorage indisponível — vale o padrão nesta sessão */ }
   return "system";
 };
-// A cor da barra do navegador no mobile acompanha o tema.
+// Troca o tema e atualiza a cor da barra do navegador no mobile.
+// As transições são desligadas durante a troca: sem isso, o Chromium deixa elementos com
+// `transition` presos na cor do tema anterior, porque o que mudou foi a variável CSS por trás
+// da propriedade e ele não reanima nesse caso (ver .theme-switching em index.css).
 const applyTheme = (choice) => {
   const efetivo = resolveTheme(choice);
-  document.documentElement.setAttribute("data-theme", efetivo);
+  const root = document.documentElement;
+  root.classList.add("theme-switching");
+  root.setAttribute("data-theme", efetivo);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", efetivo === "dark" ? "#0A1019" : "#101B2D");
+  // Dois quadros: um para o navegador aplicar as cores novas, outro para religar as transições.
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => root.classList.remove("theme-switching"));
+  });
   return efetivo;
 };
 
-function ThemeSelector({ theme, setTheme, compact = false }) {
+/* Só ícones: com os três rótulos escritos, os botões somavam 228px num espaço de 204px na
+   barra lateral e vazavam para fora da pílula. A legenda acima e o title/aria-label de cada
+   botão mantêm o significado sem depender da largura. */
+function ThemeSelector({ theme, setTheme }) {
   return (
-    <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "rgba(255,255,255,0.06)" }} role="group" aria-label="Tema da interface">
-      {THEME_OPTIONS.map((o) => {
-        const Icon = o.icon;
-        const ativo = theme === o.value;
-        return (
-          <button
-            key={o.value}
-            onClick={() => setTheme(o.value)}
-            title={`Tema ${o.label.toLowerCase()}`}
-            aria-pressed={ativo}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[11.5px] font-medium transition-colors"
-            style={{ background: ativo ? "rgba(255,255,255,0.14)" : "transparent", color: ativo ? "#fff" : SHELL_MUTED }}
-          >
-            <Icon size={13} />
-            {!compact && o.label}
-          </button>
-        );
-      })}
+    <div className="mb-2">
+      <div style={{ fontSize: 10, color: SHELL_MUTED, letterSpacing: "0.08em", marginBottom: 5, paddingLeft: 3 }}>TEMA</div>
+      <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "rgba(255,255,255,0.06)" }} role="group" aria-label="Tema da interface">
+        {THEME_OPTIONS.map((o) => {
+          const Icon = o.icon;
+          const ativo = theme === o.value;
+          return (
+            <button
+              key={o.value}
+              onClick={() => setTheme(o.value)}
+              title={`Tema: ${o.label}`}
+              aria-label={`Tema: ${o.label}`}
+              aria-pressed={ativo}
+              className="flex-1 flex items-center justify-center py-1.5 rounded-md transition-colors"
+              style={{ background: ativo ? "rgba(255,255,255,0.16)" : "transparent", color: ativo ? "#fff" : SHELL_MUTED }}
+            >
+              <Icon size={15} />
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2215,7 +2287,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {[...overdueItems, ...soonItems].map((t) => (
-                  <button key={t.id} onClick={() => togglePaid(t.id)} className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] bg-white/60 hover:bg-white transition-colors">
+                  <button key={t.id} onClick={() => togglePaid(t.id)} className="alert-chip flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] transition-colors">
                     <span className="font-medium">{t.description}</span>
                     <span style={{ color: SLATE }}>· vence dia {t.dueDay}</span>
                     <span style={{ color: SAGE, fontWeight: 600 }}>marcar como pago</span>
@@ -2274,7 +2346,7 @@ function LancamentosTab({ selectedMonth, setSelectedMonth, transactions, categor
                   </thead>
                   <tbody>
                     {monthTx.map((t) => (
-                      <tr key={t.id} style={{ borderBottom: `1px solid ${LINE}`, opacity: t.ignored ? 0.55 : 1 }} className="hover:bg-black/[0.015]">
+                      <tr key={t.id} style={{ borderBottom: `1px solid ${LINE}`, opacity: t.ignored ? 0.55 : 1 }} className="table-row-hover">
                         <td className="px-4 py-2.5 max-w-[240px]">
                           <div className="flex items-center gap-1.5">
                             {/* A descrição é truncada na coluna; o tooltip mostra ela por
@@ -3144,7 +3216,7 @@ function RecorrenciasTab({ transactions, catById, subById, cards, vehicles, togg
         <Field label="Buscar por nome">
           <div className="relative">
             <Search size={13.5} color={SLATE} className="absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input value={nameQuery} onChange={(e) => setNameQuery(e.target.value)} placeholder="Ex.: Spurs Car, Plano de Saúde…" className={inputCls} style={{ ...inputStyle, paddingLeft: 30, width: 220 }} />
+            <input value={nameQuery} onChange={(e) => setNameQuery(e.target.value)} placeholder="Ex.: Financiamento do carro, Plano de Saúde…" className={inputCls} style={{ ...inputStyle, paddingLeft: 30, width: 220 }} />
           </div>
         </Field>
         <Field label="Mês">
@@ -3598,7 +3670,7 @@ function CategoriasTab({ categories, addCategory, deleteCategory, addSubcategory
                 <div className="h-1.5 rounded-full" style={{ background: TRACK }}><div className="h-1.5 rounded-full" style={{ width: `${(vehiclePaidInstallments(v, transactions) / v.totalInstallments) * 100}%`, background: SAGE }} /></div>
               </div>
             ))}
-            {!vehicles.length && <EmptyState icon={Car} title="Nenhum veículo cadastrado" desc="Adicione o Spurs Car ou outro financiamento para acompanhar." />}
+            {!vehicles.length && <EmptyState icon={Car} title="Nenhum veículo cadastrado" desc="Cadastre um financiamento para acompanhar as parcelas aqui." />}
           </div>
         </div>
 
@@ -3668,7 +3740,7 @@ function VehicleModal({ initial, onClose, onSave }) {
   return (
     <Modal title={initial ? "Editar financiamento" : "Novo financiamento"} onClose={onClose}>
       <div className="space-y-3.5">
-        <Field label="Nome do veículo"><input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} style={inputStyle} placeholder="Ex.: Spurs Car" /></Field>
+        <Field label="Nome do veículo"><input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} style={inputStyle} placeholder="Ex.: Carro da família" /></Field>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Valor total (R$)"><input type="number" value={totalValue} onChange={(e) => setTotalValue(e.target.value)} className={inputCls} style={inputStyle} /></Field>
           <Field label="Valor da parcela (R$)"><input type="number" value={installmentValue} onChange={(e) => setInstallmentValue(e.target.value)} className={inputCls} style={inputStyle} /></Field>

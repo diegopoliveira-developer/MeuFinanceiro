@@ -106,6 +106,40 @@ explícitos.
 **Como varrer**: no tema escuro, procurar por elementos dentro de `main` com fundo de
 luminância alta e contraste < 4,5:1 contra o próprio texto. Foi o que achou os três casos.
 
+### `transition` + variável CSS = valor preso ao trocar o tema
+
+O Chromium **não reanima** uma propriedade em transição quando o que muda é a **variável CSS**
+por trás dela. Como todas as cores vêm de `var(--…)`, qualquer elemento com `transition` ficava
+preso na cor do tema anterior ao trocar de tema — a troca parecia "aplicar pela metade", e foi
+relatada pelo usuário como "o seletor de modo noturno está quebrado".
+
+**Sintoma que confunde**: `getComputedStyle` mostra a variável já com o valor novo
+(`--paper: #FFFFFF`) e, ao mesmo tempo, a propriedade com o valor antigo
+(`background-color: rgb(25,32,43)`). Desligar a transição no elemento faz o valor saltar para o
+correto — é o teste que confirma o diagnóstico.
+
+**Solução**: `applyTheme()` põe a classe `.theme-switching` no `<html>` (que zera `transition`
+em tudo), troca o `data-theme` e remove a classe **dois quadros depois**. Um quadro só não
+basta: o primeiro aplica as cores, o segundo religa as transições.
+
+**A mesma causa** derrubava a barra lateral: com `transition-transform` e o `transform` do
+Tailwind composto por `--tw-translate-x`, ao **redimensionar** a janela para além de 1024px com
+a página aberta a barra ficava presa em `-100%` (fora da tela), levando junto o seletor de tema.
+Resolvido com `lg:transition-none` — a partir de `lg` a barra é fixa e não precisa animar.
+
+### Categoria apagada ressuscitava porque o seed roda toda sessão
+
+`seedCategories()` recria a taxonomia de fábrica a cada carga do app. A sincronização fazia
+**união** de local e remoto e subia para a planilha tudo que só existia local — então uma
+categoria de fábrica apagada voltava do seed na sessão seguinte e era **regravada** na planilha.
+
+**Solução**: quando a planilha já tem categorias, ela é a fonte da verdade sobre o que existe.
+Sobe só o que é local **e não pertence ao seed** (`SEED_CATEGORY_ROW_IDS`), o que preserva
+categoria criada pelo usuário cuja gravação falhou (offline) sem ressuscitar padrão de fábrica.
+Com a planilha vazia (primeira sincronização), a taxonomia local sobe inteira.
+
+**Só afeta categorias**: os seeds de cartões, veículos e lançamentos retornam vazio.
+
 ### Um erro de render derruba o app inteiro
 
 Não existe *error boundary*. Exceção não tratada durante o render leva a tela em branco, sem

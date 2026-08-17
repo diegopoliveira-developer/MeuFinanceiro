@@ -7,6 +7,44 @@ Regras: checklist Markdown, tarefas agrupadas por categoria.
 
 ---
 
+## 🔥 Pedido de 2026-08-16 — quatro correções
+
+- [x] **N1 · Cores de vencido/a vencer ilegíveis no modo noturno.** ✅ Não eram os chips de
+      status (mediam 5,5–8,6:1) e sim as **pílulas do banner de alerta**, que usavam
+      `bg-white/60` — branco literal, que ignora o tema. No escuro davam texto claro sobre fundo
+      claro: **1,17:1**. Trocadas por uma classe temática (`.alert-chip`). Corrigidos junto dois
+      outros literais: o hover da linha da tabela e o do botão de fechar do modal.
+      **Medido**: pior contraste da tela de Lançamentos no escuro foi de **1,17:1 para 6,17:1**.
+- [x] **N2 · Seletor de modo noturno quebrado.** ✅ Eram **dois** problemas somados:
+      1. **Transbordo**: os três rótulos escritos precisavam de 228px num espaço de 204px, e o
+         terceiro botão vazava para fora da pílula. Agora são ícones com legenda "TEMA" acima e
+         `title`/`aria-label` em cada um — 63px por botão, sem transbordo.
+      2. **Cores presas** (causa real do "quebrado"): ver `Conhecimento.md` — o Chromium não
+         reanima propriedade em transição quando muda a variável CSS por trás dela, então a
+         troca de tema aplicava pela metade. Resolvido desligando as transições durante a troca.
+      **Testado**: cinco trocas seguidas de tema, todas com as cores corretas.
+- [x] **N2b · Barra lateral sumia ao redimensionar a janela.** ✅ Achado ao investigar o N2 e de
+      mesma causa: cruzando 1024px com a página aberta, a barra ficava presa fora da tela — e
+      com ela o seletor de tema. Resolvido com `lg:transition-none`.
+- [x] **N3 · Categorias apagadas voltavam ao relogar.** ✅ Causa: `seedCategories()` roda a cada
+      sessão e a sincronização fazia união local+remoto, então a categoria apagada renascia do
+      seed e era **regravada** na planilha. Decisão e alternativas em `Contextos/Decisoes.md`.
+      **Testado**: com a planilha sem `spurs_car`, após login e sincronização a categoria não
+      volta à tela e **nenhum POST** é enviado. Trocados também os textos de exemplo que citavam
+      "Spurs Car" (herança da planilha legada) — eram o que ainda aparecia na tela e confundia.
+- [x] **N4 · Loader na carga inicial.** ✅ Enquanto a primeira sincronização não termina, o app
+      mostra uma tela de carregamento com o logotipo e um indicador, em vez do conteúdo vazio.
+      Vale **só** para a primeira sincronização; as demais seguem em segundo plano. O `finally`
+      garante que falha de rede também libera a tela. A tela é autossuficiente em estilo, pela
+      armadilha já registrada (classes injetadas pelo `Dashboard` não existem antes dele).
+      **Testado** com a planilha falsa respondendo em 2,5s: o loader aparece, o conteúdo vazio
+      não é exposto, e a tela libera quando a sincronização termina.
+- [ ] **A subcategoria de fábrica ainda se chama "Spurs Car (parcela)".** Os textos de exemplo
+      da interface foram trocados, mas o seed mantém o nome, que é específico do usuário
+      original. Renomear afeta quem já tem a linha gravada na planilha — decidir se vale.
+
+---
+
 ## 🔥 Fila atual — pedido de 2026-08-15
 
 Dez tarefas pedidas pelo usuário. A **numeração T1–T10 é a do pedido original** e não muda;

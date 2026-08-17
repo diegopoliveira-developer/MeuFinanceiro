@@ -14,7 +14,7 @@
  * Ordem: cronológica, mais recentes ao FINAL — a mesma convenção de
  * `Contextos/Decisoes.md` e `Contextos/Chat.log`.
  */
-const VERSION = '1.9.2';
+const VERSION = '1.9.3';
 
 const VERSION_HISTORY = [
     {
@@ -149,6 +149,18 @@ const VERSION_HISTORY = [
             'em 2026. Vale só como ponto de partida: havendo ano salvo no navegador ou na aba ' +
             'Config da planilha, é ele que manda. Acrescentado ainda o cabeçalho obrigatório ' +
             'de arquivo em src/, com o marcador correto de cada linguagem.'
+    },
+    {
+        date: '2026-08-16',
+        version: '1.9.3',
+        description:
+            'Quatro correções relatadas pelo usuário: pílulas do banner de alerta ilegíveis no ' +
+            'tema escuro (usavam branco literal); seletor de tema transbordando a barra lateral ' +
+            'e cores presas na troca de tema (o navegador não reanima transição quando muda a ' +
+            'variável CSS por trás dela); categoria apagada ressuscitando do seed a cada sessão ' +
+            'e sendo regravada na planilha; e tela de carregamento durante a primeira ' +
+            'sincronização, no lugar do conteúdo vazio. Corrigida junto a barra lateral, que ' +
+            'sumia ao redimensionar a janela para além de 1024px.'
     },
 ];
 

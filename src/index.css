@@ -94,6 +94,19 @@
   color-scheme: dark;
 }
 
+/* Desliga TODAS as transições durante a troca de tema.
+   Não é cosmético: o Chromium não reanima uma propriedade em transição quando o que muda é a
+   variável CSS por trás dela. Com as transições ligadas, elementos como as pílulas do banner
+   de alerta e os botões do seletor ficavam presos na cor do tema anterior — a troca parecia
+   aplicar pela metade. A classe é posta antes de trocar o data-theme e removida no quadro
+   seguinte (ver applyTheme em App.jsx). */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
 html, body, #root {
   height: 100%;
 }
